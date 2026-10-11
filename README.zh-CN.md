@@ -1,326 +1,133 @@
-<div align="center">
-<h1>Gemini Next Chat</h1>
+<p align="center">
+  <img src="public/logo.png" width="80" alt="Neo Chat logo" />
+</p>
 
-![GitHub deployments](https://img.shields.io/github/deployments/u14app/gemini-next-chat/Production)
-![GitHub Release](https://img.shields.io/github/v/release/u14app/gemini-next-chat)
-![Docker Image Size (tag)](https://img.shields.io/docker/image-size/xiangfa/talk-with-gemini/latest)
-![Docker Pulls](https://img.shields.io/docker/pulls/xiangfa/talk-with-gemini)
-![GitHub License](https://img.shields.io/github/license/u14app/gemini-next-chat)
+<h1 align="center">Neo Chat</h1>
 
-一键免费部署您的私人 Gemini 应用, 支持 Gemini 1.5 Pro、Gemini 1.5 Flash、Gemini Pro 和 Gemini Pro Vision 模型。
-
-[English](./README.md) · **简体中文**
-
-[![Vercel](https://img.shields.io/badge/Vercel-111111?style=flat&logo=vercel&logoColor=white)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fu14app%2Fgemini-next-chat&project-name=gemini-next-chat&env=GEMINI_API_KEY&env=ACCESS_PASSWORD&repository-name=gemini-next-chat)
-[![Cloudflare](https://img.shields.io/badge/Cloudflare-F69652?style=flat&logo=cloudflare&logoColor=white)](#部署到-cloudflare)
-
-[![Gemini](https://img.shields.io/badge/Gemini-8E75B2?style=flat&logo=googlegemini&logoColor=white)](https://ai.google.dev/)
-[![Next](https://img.shields.io/badge/Next.js-111111?style=flat&logo=nextdotjs&logoColor=white)](https://nextjs.org/)
-[![Tailwind CSS](https://img.shields.io/badge/Tailwind%20CSS-06B6D4?style=flat&logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
-[![shadcn/ui](https://img.shields.io/badge/shadcn/ui-111111?style=flat&logo=shadcnui&logoColor=white)](https://ui.shadcn.com/)
-
-[![Web][Web-image]][web-url]
-[![MacOS][MacOS-image]][download-url]
-[![Windows][Windows-image]][download-url]
-[![Linux][Linux-image]][download-url]
-
-[网页版][web-url] / [客户端][download-url] / [反馈](https://github.com/u14app/gemini-next-chat/issues)
-
-[web-url]: https://gemini.u14.app/
-[download-url]: https://github.com/u14app/gemini-next-chat/releases
-[Web-image]: https://img.shields.io/badge/Web-PWA-orange?logo=microsoftedge
-[Windows-image]: https://img.shields.io/badge/-Windows-blue?logo=windows
-[MacOS-image]: https://img.shields.io/badge/-MacOS-black?logo=apple
-[Linux-image]: https://img.shields.io/badge/-Linux-333?logo=ubuntu
-
-**分享 GeminiNextChat 仓库**
-
-[![][share-x-shield]][share-x-link]
-[![][share-telegram-shield]][share-telegram-link]
-[![][share-whatsapp-shield]][share-whatsapp-link]
-[![][share-reddit-shield]][share-reddit-link]
-[![][share-weibo-shield]][share-weibo-link]
-[![][share-mastodon-shield]][share-mastodon-link]
+<p align="center">
+  <strong>连接模型，汇聚知识，构建你的 AI 工作空间。</strong>
+</p>
 
-[share-mastodon-link]: https://mastodon.social/share?text=Check%20this%20GitHub%20repository%20out%20GeminiNextChat%20-%20An%20open-source%2C%20extensible%20(Function%20Calling)%2C%20high-performance%20gemini%20chatbot%20framework.%20It%20supports%20one-click%20free%20deployment%20of%20your%20private%20Gemini%20web%20application.%20https%3A%2F%2Fgithub.com%2Fu14app%2Fgemini-next-chat%20%23chatbot%20%23gemini
-[share-mastodon-shield]: https://img.shields.io/badge/-share%20on%20mastodon-black?labelColor=black&logo=mastodon&logoColor=white&style=flat-square
-[share-reddit-link]: https://www.reddit.com/submit?title=Check%20this%20GitHub%20repository%20out%20GeminiNextChat%20-%20An%20open-source%2C%20extensible%20(Function%20Calling)%2C%20high-performance%20gemini%20chatbot%20framework.%20It%20supports%20one-click%20free%20deployment%20of%20your%20private%20Gemini%20web%20application.%20https%3A%2F%2Fgithub.com%2Fu14app%2Fgemini-next-chat
-[share-reddit-shield]: https://img.shields.io/badge/-share%20on%20reddit-black?labelColor=black&logo=reddit&logoColor=white&style=flat-square
-[share-telegram-link]: https://t.me/share/url"?text=Check%20this%20GitHub%20repository%20out%20GeminiNextChat%20-%20An%20open-source%2C%20extensible%20(Function%20Calling)%2C%20high-performance%20gemini%20chatbot%20framework.%20It%20supports%20one-click%20free%20deployment%20of%20your%20private%20Gemini%20web%20application.%20https%3A%2F%2Fgithub.com%2Fu14app%2Fgemini-next-chat
-[share-telegram-shield]: https://img.shields.io/badge/-share%20on%20telegram-black?labelColor=black&logo=telegram&logoColor=white&style=flat-square
-[share-weibo-link]: http://service.weibo.com/share/share.php?sharesource=weibo&title=Check%20this%20GitHub%20repository%20out%20GeminiNextChat%20-%20An%20open-source%2C%20extensible%20(Function%20Calling)%2C%20high-performance%20gemini%20chatbot%20framework.%20It%20supports%20one-click%20free%20deployment%20of%20your%20private%20Gemini%20web%20application.%20https%3A%2F%2Fgithub.com%2Fu14app%2Fgemini-next-chat
-[share-weibo-shield]: https://img.shields.io/badge/-share%20on%20weibo-black?labelColor=black&logo=sinaweibo&logoColor=white&style=flat-square
-[share-whatsapp-link]: https://api.whatsapp.com/send?text=Check%20this%20GitHub%20repository%20out%20GeminiNextChat%20-%20An%20open-source%2C%20extensible%20(Function%20Calling)%2C%20high-performance%20gemini%20chatbot%20framework.%20It%20supports%20one-click%20free%20deployment%20of%20your%20private%20Gemini%20web%20application.%20https%3A%2F%2Fgithub.com%2Fu14app%2Fgemini-next-chat%20%23chatbot%20%23gemini
-[share-whatsapp-shield]: https://img.shields.io/badge/-share%20on%20whatsapp-black?labelColor=black&logo=whatsapp&logoColor=white&style=flat-square
-[share-x-link]: https://x.com/intent/tweet?hashtags=chatbot%2CchatGPT%2CopenAI&text=Check%20this%20GitHub%20repository%20out%20GeminiNextChat%20-%20An%20open-source%2C%20extensible%20(Function%20Calling)%2C%20high-performance%20gemini%20chatbot%20framework.%20It%20supports%20one-click%20free%20deployment%20of%20your%20private%20Gemini%20web%20application.%20https%3A%2F%2Fgithub.com%2Fu14app%2Fgemini-next-chat
-[share-x-shield]: https://img.shields.io/badge/-share%20on%20x-black?labelColor=black&logo=x&logoColor=white&style=flat-square
+<p align="center">
+  <a href="README.md">English</a> · 简体中文
+</p>
 
-![cover](./public/screenshots/screenshots.png)
+<p align="center">
+  <a href="https://github.com/u14app/neo-chat/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/u14app/neo-chat/actions/workflows/ci.yml/badge.svg" /></a>
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue" /></a>
+</p>
 
-简洁的界面，支持图片识别和语音对话
+Neo Chat 将多模型对话、Agent 和深度研究整合到一个可自托管的工作空间。连接自己的模型供应商，围绕文件开展工作，对话记录默认保存在浏览器中。
 
-![Gemini](./public/screenshots/pc-screenshot-1.png)
+![Neo Chat 桌面界面](public/desktop.png)
 
-支持 Gemini 1.5 和 Gemini 2.0 多模态模型
+<details>
+<summary>查看移动端界面</summary>
 
-![Support plugins](./public/screenshots/pc-screenshot-3.jpg)
+![Neo Chat 移动端界面](public/mobile.png)
 
-支持插件功能，内置网络搜索、网页解读、论文搜索、实时天气等多种实用插件
+</details>
 
-![Multimodal Live](./docs/images/multimodal-live.jpg)
+## 为什么选择 Neo Chat？
 
-支持 Multimodal Live API，流畅的语音、视频体验
+- **自由选择模型。** 支持 Google、OpenAI、Anthropic 和 OpenAI 兼容接口，可使用模型支持的图片理解与生成能力。
+- **从对话到行动与研究。** 日常聊天、执行多步工具任务的 Agent，以及支持计划审核、引用报告和手动恢复的 Deep Research。
+- **围绕你的知识工作。** 文件附件、知识库检索、本地搜索、记忆和可复用的助理预设。
+- **按需扩展能力。** 文本技能、OpenAPI 插件、远程 MCP 服务器，以及连接本地 MCP 工具的可选 Docker 桥接。
+- **不止于文字。** 语音、可编辑的内容产物、Markdown、公式、图表与交互式图表，并提供导出功能。
+- **智能界面。** 在回答中使用清单、比较、表单、支持错题复练的测验、闪卡、计算器和图表，以及支持 HTTPS 媒体/CDN 资源和明确 AI 对话按钮的无边框 HTML 界面。后续聊天自动获得界面源码与已报告的可见结果。数据探索联动表格、图表和计算，支持来源版本追踪、工具结果选择与确认后的本地草稿。实验性 MCP Apps 展示宿主默认关闭，须单独部署沙箱。学习进度保留在当前会话内；分享仅在明确选择后包含你的输入。[使用方法与 HTML 发布限制](docs/intelligent-ui.md)。
+- **本地优先的数据管理。** 默认使用浏览器存储，支持 ZIP 备份与恢复，以及通过 WebDAV 或 S3/MinIO 进行可选的端到端加密同步。
 
-![Tray app](./docs/images/trayapp.png)
+界面支持简体中文、英语和日语，适配桌面与移动端。
 
-跨平台的应用客户端，支持常驻菜单栏，让您的工作效率翻倍
+版本变化见[更新日志](CHANGELOG.md)，后续计划见[路线图](ROADMAP.md)。
 
-</div>
+## 快速开始
 
-> 注意：如果您项目使用过程中遇到问题，可以查看[常见问题](#常见问题)的已知问题及解决方案。
+### 本地运行
 
-## 目录
+需要 **Node.js 24** 和 **pnpm 10.30.3**（通过 Corepack 使用）。
 
-- [主要功能](#主要功能)
-- [开发计划](#️开发计划)
-- [开始使用](#开始使用)
-  - [更新代码](#更新代码)
-- [环境变量](#环境变量)
-  - [访问密码](#访问密码)
-  - [自定义模型列表](#️自定义模型列表)
-- [开发](#开发)
-  - [最低要求](#️最低要求)
-- [部署](#部署)
-  - [容器部署（推荐）](#容器部署推荐)
-  - [静态部署](#静态部署)
-- [常见问题](#常见问题)
-- [开源协议](#开源协议)
-- [收藏历史](#收藏历史)
-
-## 主要功能
-
-- 在 1 分钟内使用 Vercel **免费一键部署**
-- 提供体积极小（~4MB）的跨平台客户端（Windows/MacOS/Linux），可以常驻菜单栏，提升办公效率
-- 支持多模态模型，可以理解图片、视频、音频和部分文本文档
-- 语音模式：让您直接与 Gemini 对话，支持 Multimodal Live API
-- 视觉识别，让 Gemini 可以看懂图片内容
-- 助理市场，拥有数百精选的系统指令
-- 插件系统，内置网络搜索、网页解读、论文搜索、实时天气等多种实用插件
-- 会话列表，让您可以保持重要的会话内容或与 Gemini 讨论不同的话题
-- 支持 Artifact，让您可以更加优雅地修改对话内容
-- 完整的 Markdown 支持：KaTex 公式、代码高亮, Mermaid 图表等
-- 自动压缩上下文聊天记录，在节省 Token 的同时支持超长对话
-- 隐私安全，所有数据保存在用户浏览器本地
-- 支持 PWA，可以以应用形式运行
-- 精心设计的 UI，响应式设计，支持深色模式
-- 极快的首屏加载速度，支持流式响应
-- 静态部署，支持部署在任何支持静态页面的网站服务，比如 Github Page、Cloudflare、Vercel 等
-- 多国语言支持：English、简体中文、繁体中文、日本語、한국어、Español、Deutsch、Français、Português、Русский 以及 العربية
-
-## 开发计划
-
-- [x] 重构话题广场，引入 Prompt 列表
-- [x] 使用 tauri 打包桌面应用
-- [x] 实现基于 functionCall 插件
-- [x] 支持会话列表
-- [x] 支持对话导出功能
-- [x] 启用 Multimodal Live API
-- [ ] 支持联网 Deep Research 模式
-- [ ] 支持本地知识库
-
-## 开始使用
-
-1. 获取 [Gemini API Key](https://aistudio.google.com/app/apikey)
-2. 一键部署项目，可以选择部署到 Vercel
-
-   [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fu14app%2Fgemini-next-chat&project-name=gemini-next-chat&env=GEMINI_API_KEY&env=ACCESS_PASSWORD&repository-name=gemini-next-chat)
-
-3. 开始使用
-
-### 部署到 Cloudflare
-
-目前项目支持部署到 Cloudflare，但您需要按照 [如何部署到 Cloudflare Page](./docs/How-to-deploy-to-Cloudflare-Page.zh-CN.md) 进行操作。
-
-### 更新代码
-
-如果你想立即更新，可以查看[GitHub文档](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/syncing-a-fork)以了解如何将分叉项目与上游代码同步。
-
-您可以关注该项目或关注作者以及时获取发布通知。
-
-## 环境变量
-
-#### `GEMINI_API_KEY`（可选）
-
-您的 Gemini api 密钥。 如果您需要“启用”服务器 api，这是必需的。**该变量不会影响前端页面上的 Gemini 密钥的值。**
-支持多个 key，每个 key 之间使用 `,` 分隔，即 `key1,key2,key3`
-
-#### `GEMINI_API_BASE_URL`（可选）
-
-> 默认值：`https://generativelanguage.googleapis.com`
-
-> 示例：`http://your-gemini-proxy.com`
-
-覆盖 Gemini api 请求基本 url。**为了避免服务端代理 url 泄漏，不会覆盖和影响前端页面中的值。**
-
-#### `NEXT_PUBLIC_GEMINI_MODEL_LIST`（可选）
-
-自定义模型列表，默认为: all。
-
-#### `NEXT_PUBLIC_UPLOAD_LIMIT`（可选）
-
-文件上传大小限制。默认不限制文件大小。
-
-#### `ACCESS_PASSWORD`（可选）
-
-访问密码。
-
-#### `HEAD_SCRIPTS` （可选）
-
-用于注入的脚本代码可用于统计或错误跟踪。
-
-#### `EXPORT_BASE_PATH` （可选）
-
-仅用于[静态部署](#静态部署)模式下设置页面基础路径。
-
-### 访问密码
-
-项目提供访问控制。请在 `.env` 文件或环境变量页面添加名为 `ACCESS_PASSWORD` 的环境变量。
-
-添加或修改此环境变量后，请重新部署项目以使更改生效。
-
-### 自定义模型列表
-
-本项目支持自定义模型列表。请在 `.env` 文件或环境变量页面添加名为 `NEXT_PUBLIC_GEMINI_MODEL_LIST` 的环境变量。
-
-默认模型列表使用 `all` 表示，多个模型之间使用 `,` 分隔。
-
-如果需要增加新的模型请直接写入模型名称 `all,new-model-name`，或使用 `+` 符号加上模型名称表示增加，即 `all,+new-model-name`。
-
-如果要移除模型列表中的某个模型，请使用 `-` 符号加上模型名称表示移除，即 `all,-existing-model-name`。如果要移除默认模型列表，可以用 `-all` 表示。
-
-如果要设定默认模型，可以使用 `@` 符号加上模型名称表示默认模型，即 `all,@default-model-name`。
-
-## 开发
-
-如果您没安装过 pnpm
-
-```shell
-npm install -g pnpm
+```bash
+git clone https://github.com/u14app/neo-chat.git
+cd neo-chat
+corepack pnpm install --frozen-lockfile
+corepack pnpm dev
 ```
 
-```shell
-# 1. 先安装nodejs和yarn
-# 2. 配置本地变量，请将 `.env.example` 改为 `.env` 或 `.env.local`
-# 3. 运行
-pnpm install
-pnpm dev
+打开 [localhost:3000](http://localhost:3000)，在**设置**中添加模型供应商和 API key，即可开始对话。
+
+大多数选项都可以在应用内配置。如需设置部署级默认值，将 [.env.example](.env.example) 复制为 `.env.local`，并参考[环境变量文档](docs/environment-variables.md)。
+
+### 使用 Docker 体验
+
+直接运行官方镜像，无需克隆仓库：
+
+```bash
+docker run --rm -p 127.0.0.1:3000:3000 \
+  -e ACCESS_PASSWORD='replace-with-a-strong-password' \
+  -e BYOK_ALLOW_EPHEMERAL_KEY=true \
+  ghcr.io/u14app/neo-chat:latest
 ```
 
-### 最低要求
-
-NodeJS >= 18，Docker >= 20
+打开 [localhost:3000](http://localhost:3000)，输入你设置的访问密码。此本地示例使用临时凭据加密密钥；用于生产环境前，请配置稳定的 BYOK 密钥，避免重启或多实例之间发生密钥轮换。
 
 ## 部署
 
-### 容器部署（推荐）
+| 平台                   | 开始方式                                                                                                                    |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| **Docker**             | 使用官方镜像，长期运行可参考 [Compose 配置](docs/deployment-hardening.md#run-with-docker-compose)。                         |
+| **Vercel**             | 导入仓库，选择 Next.js 预设，保留默认输出目录。                                                                             |
+| **Cloudflare Workers** | 运行 `corepack pnpm build:worker`，然后执行 `corepack pnpm deploy:worker`。部署脚本通过 `--keep-vars` 保留 dashboard 变量。 |
 
-> Docker 版本需要在 20 及其以上，否则会提示找不到镜像。
+生产部署前，请按照[部署指南](docs/deployment-hardening.md) 配置稳定的 BYOK 密钥、访问保护和共享运行时存储。单实例 hosted 可临时使用进程密钥和内存限流；公开的多实例部署仍应使用稳定密钥与共享存储。
 
-> ⚠️ 注意：docker 版本在大多数时间都会落后最新的版本 1 到 2 天，所以部署后会持续出现“存在更新”的提示，属于正常现象。
+## 你的数据
 
-```shell
-docker pull xiangfa/talk-with-gemini:latest
+对话和工作区文件默认保存在浏览器存储中。请求会将必要内容发送给你使用的模型供应商及服务，通常经过应用的 API 路由。本地优先存储不代表模型在离线运行。
 
-docker run -d --name talk-with-gemini -p 5481:3000 xiangfa/talk-with-gemini
+加密同步需要主动开启。备份不包含凭据和外部服务数据；自定义模板、研究方向调整、报告问答等 Research 扩展数据目前仅保存在当前浏览器，不包含在 ZIP 备份或加密同步中。
+
+Agent 和 Research 在浏览器前台编排运行。关闭页面会中断执行，已保存的任务需要显式恢复。部署访问密码是访问门禁，不是多用户账号系统。
+
+了解更多：[隐私与本地数据](docs/privacy-and-local-data.md)、[加密同步](docs/encrypted-sync.md)、[安全政策](SECURITY.md)。
+
+## 文档
+
+浏览[文档中心](docs/README.md)，或直接选择下方指南。
+
+| 指南                                           | 内容                                          |
+| ---------------------------------------------- | --------------------------------------------- |
+| [配置参考](docs/environment-variables.md)      | 模型供应商、搜索、RAG、语音与服务端默认值     |
+| [部署指南](docs/deployment-hardening.md)       | Docker、Vercel、Cloudflare Workers 与生产配置 |
+| [Agent 运行时](docs/agent-runtime.md)          | 工具、权限、工作区与执行恢复                  |
+| [深度研究](docs/research-workflows.md)         | 模板、来源、研究方向调整与报告问答            |
+| [插件开发](docs/plugin-development.md)         | 开发和集成工具                                |
+| [本地 MCP 桥接](docs/mcp-stdio-bridge.md)      | 通过 Docker 连接允许列表中的 stdio 服务器     |
+| [对话分享](docs/conversation-sharing.md)       | 发布、更新、设置有效期与撤销只读快照          |
+| [离线模式](docs/offline-pwa.md)                | PWA 安装与可用的离线功能                      |
+| [可靠性与安全](docs/reliability-and-safety.md) | 运行边界、异常处理与恢复                      |
+
+## 参与贡献
+
+欢迎贡献代码、报告问题或提出具体改进建议。请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)，了解开发环境、检查流程和 PR 要求。参与讨论请遵守[行为准则](CODE_OF_CONDUCT.md)，漏洞报告请遵循[安全政策](SECURITY.md)。
+
+项目基于 Next.js、React、TypeScript 和 Zustand 构建。常用开发命令：
+
+```bash
+corepack pnpm dev        # 启动开发服务器
+corepack pnpm lint       # 运行 ESLint
+corepack pnpm typecheck  # 检查 TypeScript
+corepack pnpm test       # 运行 Vitest
+corepack pnpm build      # 创建生产构建
 ```
 
-您也可以指定额外的环境变量：
+## 社区
 
-```shell
-docker run -d --name talk-with-gemini \
-   -p 5481:3000 \
-   -e GEMINI_API_KEY=AIzaSy... \
-   -e ACCESS_PASSWORD=your-password \
-   xiangfa/talk-with-gemini
-```
+欢迎在 [LinuxDo](https://linux.do/) 参与讨论，或通过 [Issue](https://github.com/u14app/neo-chat/issues) 报告问题、提出功能需求。
 
-如果您需要指定其他环境变量，请自行在上述命令中增加 `-e 环境变量=环境变量值` 来指定。
+寻找早期仅支持 Gemini 的版本？代码已归档至 [`gemini-next-chat` 分支](https://github.com/u14app/neo-chat/tree/gemini-next-chat)。
 
-使用 `docker-compose.yml` 部署：
+## 许可证
 
-```shell
-version: '3.9'
-services:
-   talk-with-gemini:
-      image: xiangfa/talk-with-gemini
-      container_name: talk-with-gemini
-      environment:
-         - GEMINI_API_KEY=AIzaSy...
-         - ACCESS_PASSWORD=your-password
-      ports:
-         - 5481:3000
-```
-
-### 静态部署
-
-您也可以直接构建静态页面版本，然后将 `out` 目录下的所有文件上传到任何支持静态页面的网站服务，比如 Github Page、Cloudflare、Vercel 等。
-
-```shell
-pnpm build:export
-```
-
-如果您将项目部署在子目录下，在访问时会遇到资源加载失败的情况，请在 `.env` 文件或者变量设置页面增加 `EXPORT_BASE_PATH=/路径/项目名称`。
-
-## 常见问题
-
-#### “User location is not supported for the API use” 的解决方案
-
-1、使用 Cloudflare AI Gateway 转发 api。目前 Cloudflare AI Gateway 已经支持 Google Vertex AI 相关 api。如何使用请参考 [如何使用 Cloudflare AI Gateway](./docs/Use-Cloudflare-AI-Gateway.zh-CN.md) 。该方案速度快、稳定性好，**推荐使用**。
-
-2、使用 Cloudflare Worker 进行 api 代理转发，详细设置请参考 [如何使用 Cloudflare Worker 代理 api](./docs/How-to-deploy-the-Cloudflare-Worker-api-proxy.zh-CN.md)。注意，该方案在某些情况下可能无法正常工作。
-
-#### 为什么我用 vercel 一键部署后的网站无法在中国正常访问
-
-vercel 部署后生成的域名在几年前就已经被国内网络屏蔽，但并没有屏蔽服务器的 ip 地址。可以自定义域名，就可以在国内正常访问了。由于 vercel 在国内并没有服务器，所以有时候会出现些许的网络波动，属于正常现象。如何设置域名，可以参考我从网上找到的解决文章[Vercel绑定自定义域名](https://docs.tangly1024.com/article/vercel-domain)。
-
-#### 为什么我无法使用 Multimodal Live
-
-目前 Multimodal Live API 只有 Gemini 2.0 Flash 模型支持，因此需要使用 Gemini 2.0 Flash 模型才可以使用。由于在国内无法访问 Gemini Multimodal Live API，因此您可能需要使用 Cloudflare Worker 部署一个代理转发的 API。如何使用请参考 [使用 Cloudflare Worker 代理 Multimodal Live API](./docs/Proxying-the-Multimodal-Live-API-with-Cloudflare-Worker.zh-CN.md)。
-_目前 Multimodal Live API 尚不支持中文语音输出。_
-
-## 致谢
-
-### 技术栈
-
-- [Next.js](https://nextjs.org/)
-- [Shadcn UI](https://ui.shadcn.com/)
-- [Tailwindcss](https://tailwindcss.com/)
-- [Zustand](https://zustand-demo.pmnd.rs/)
-
-### 灵感来源
-
-- [Lobe Chat](https://github.com/lobehub/lobe-chat)
-- [Next Web](https://github.com/ChatGPTNextWeb/NextChat)
-- [Open Canvas](https://github.com/langchain-ai/open-canvas)
-
-## 贡献
-
-欢迎为该项目做出贡献！如果您愿意做出贡献，请按照以下步骤操作：
-
-1. 在 GitHub 上 Fork 存储库。
-2. 将您 Fork 的项目克隆到本地工作区。
-3. 为您的更改创建一个新分支。
-4. 进行更改并将其提交到您的分支。
-5. 将您的更改推送到 GitHub 上的分叉。
-6. 从您的分支向主存储库提交拉取请求。
-
-在提交拉取请求之前，请确保您的代码遵循项目的编码风格并且所有测试都通过。
-如果您发现任何错误或有改进建议，请随时在 GitHub 上创建新的 issue。
-
-## 开源协议
-
-本项目遵循 [MIT](https://www.apache.org/licenses/LICENSE-2.0) 许可证。请参阅 LICENSE 文件以获取完整的许可证文本。
-
-## 收藏历史
-
-[![Star History Chart](https://api.star-history.com/svg?repos=u14app/gemini-next-chat&type=Date)](https://star-history.com/#u14app/gemini-next-chat&Date)
+[MIT](LICENSE)

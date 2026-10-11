@@ -1,0 +1,3524 @@
+import { projectUiBlock, projectUiText } from "@/lib/intelligentUi/projection";
+import { INTELLIGENT_UI_PROMPT_MARKER } from "@/lib/intelligentUi/prompt";
+import {
+  getTemporarySessionSignal,
+  isTemporarySessionId,
+  TEMPORARY_CHAT_CONFIG,
+} from "@/lib/chat/sessionRetention";
+import {
+  getResearchSourceOperation,
+  isResearchSourceProvider,
+} from "@/lib/plugin/researchSources/catalog";
+import {
+  getSpecializedCallLocator,
+  normalizeSpecializedSourceResult,
+  prepareSpecializedSourceCall,
+} from "@/lib/plugin/researchSources/client";
+import type { ResearchSourceContracts } from "@/lib/plugin/researchSources/contracts";
+import {
+  Message,
+  Attachment,
+  ChatConfig,
+  ChatMode,
+  MessageOutputBlock,
+  ToolCall,
+  ToolConfirmationController,
+  ToolConfirmationDecision,
+  Source,
+  AppliedSkillInvocation,
+  AgentUserInputController,
+  Plugin,
+  AgentMemoryScope,
+} from "@/types";
+import { useSettingsStore, getTaskModel } from "@/store/core/settingsStore";
+import { useCoreSettingsStore } from "@/store/core/coreSettingsStore";
+import { captureToolResultView } from "@/lib/intelligentUi/toolResults/adapters";
+import { v7 as uuidv7 } from "uuid";
+import { executePluginFunction } from "@/utils/pluginUtils";
+import { getModelCallablePluginFunctions } from "@/lib/plugin/resolve";
+import { getPluginFunctionInvocationPolicy } from "@/lib/plugin/risk";
+import type {
+  PluginFunction,
+  PluginFunctionRisk,
+  ToolApprovalProfile,
+  ToolEffect,
+  ToolInvocationPolicy,
+} from "@/lib/plugin/types";
+import {
+  buildForcedToolDirective,
+  ForcedPluginInvocationError,
+  mergeForcedPluginIds,
+} from "@/lib/chat/forcedInvocation";
+import {
+  createPluginFunctionFingerprint,
+  createToolApprovalIdentity,
+  evaluateToolInvocationApproval,
+  normalizeToolConfirmationDecision,
+  redactSensitiveToolArgs,
+} from "@/lib/plugin/confirmation";
+import {
+  parseModelString,
+  supportsImageGeneration,
+  supportsTextOutput,
+  supportsToolCalls,
+} from "@/lib/utils/model";
+import {
+  isGoogleProviderType,
+  isOpenAIProviderType,
+} from "@/lib/providers/providerTypes";
+import { appendContextToChatInput } from "@/lib/utils/chatInput";
+import {
+  compressImageAttachments,
+  getImageCompressionConfig,
+  prepareGeneratedImageAttachments,
+} from "@/lib/utils/imageCompression";
+import {
+  stripAttachmentsDisplayCacheForModel,
+  stripMessagesDisplayCacheForModel,
+} from "@/lib/utils/imageDisplayCache";
+import { appendDiagramRequestInstructions } from "@/lib/chat/diagramPrompt";
+import { appendHtmlVisualRequestInstructions } from "@/lib/chat/htmlVisualPrompt";
+import {
+  getSearchCompatibilityErrorMessage,
+  resolveEffectiveSearchCapability,
+} from "@/lib/settings/searchRag";
+import { createMessageOutputBlockBuilder } from "@/lib/chat/messageOutputBlocks";
+import { LONG_TEXT_TOOL_NAME } from "@/lib/chat/longText";
+import {
+  AUTO_MODE_SYSTEM_INSTRUCTION,
+  applyChatMode,
+  CHAT_MODE_SWITCH_TOOL_NAME,
+  normalizeChatMode,
+} from "@/lib/chat/mode";
+import { resolveImageGenerationOptions } from "@/lib/chat/imageGenerationOptions";
+import { getResponseErrorMessage, signedApiFetch } from "@/lib/api/client";
+import { createChatRequestBody } from "@/lib/api/chatImageRequestBody";
+import {
+  buildProviderRuntimeConfig,
+  fetchWithByokRetry,
+} from "@/lib/byok/client";
+import {
+  buildDirectProviderConfig,
+  describeDirectCallError,
+  getBrowserProviderRuntime,
+  hydrateDirectProviderImageFiles,
+  shouldUseDirectCall,
+} from "./chat/transport";
+import {
+  API_INPUT_LIMITS,
+  ATTACHMENT_LIMITS,
+  PLUGIN_EXECUTION_LIMITS,
+} from "@/config/limits";
+import {
+  collectBuiltinTools,
+  consumeBuiltinResearchSourceBodies,
+  type BuiltinKnowledgeScope,
+  type BuiltinResearchQueryBudget,
+  type BuiltinResearchSourceBudget,
+  resolveBuiltinToolInvocationPolicy,
+} from "./chat/builtinTools";
+import {
+  createToolDiscoveryBindings,
+  type DiscoverableToolEntry,
+} from "./chat/builtinTools/toolDiscovery";
+import { createMcpCapabilityBindings } from "./chat/builtinTools/mcpCapabilities";
+import {
+  runExternalSearchPreflight,
+  type SearchStatusResults,
+} from "./chat/externalSearchPreflight";
+import { resolveModelMetadata } from "./chat/modelSelection";
+import {
+  compactPluginImageResultForHistory,
+  extractPluginImageAttachments,
+} from "./chat/pluginImageResults";
+import type { ChatToolDefinition } from "./chat/types";
+import {
+  createBuiltinKnowledgeAggregator,
+  createBuiltinSearchAggregator,
+} from "./chat/builtinResultAggregators";
+import { mapWithConcurrencyGroups } from "@/lib/utils/concurrency";
+import {
+  boundHistoryForRequest,
+  ContextBudgetExceededError,
+} from "@/lib/chat/requestContextBudget";
+import { prepareResearchResultHistory } from "./chat/researchResultHistory";
+import type { StructuredResponseFormat } from "@/lib/chat/responseFormat";
+import {
+  appendAgentSystemInstruction,
+  buildAgentSystemInstruction,
+} from "@/lib/agent/systemPrompt";
+import {
+  validateToolArguments,
+  validateToolOutput,
+} from "@/lib/agent/toolSchema";
+import {
+  commitToolExecution,
+  collectAgentEvidenceRecords,
+  createAgentRun,
+  failToolExecution,
+  getExceededAgentRunBudget,
+  getToolReplayDecision,
+  hashToolArguments,
+  isAgentWorkspaceAvailable,
+  markToolExecutionEffectUnknown,
+  markToolExecutionRunning,
+  prepareToolExecution,
+  recordAgentEvidence,
+  recordAgentRoundCompleted,
+  recoverInterruptedToolExecutions,
+  resumeInterruptedAgentRun,
+  transitionAgentRunStatus,
+  type AgentRun,
+  type ResolvedAgentRunBudget,
+} from "@/lib/agent";
+import { normalizeWorkspacePath } from "@/lib/agent/workspace";
+import {
+  isToolResultFailure,
+  normalizeToolResultEnvelope,
+  type ToolResultTrust,
+} from "@/lib/agent/toolResult";
+import { useAgentRunStore } from "@/store/core/agentRunStore";
+import {
+  acquireAgentRunLease,
+  checkpointAgentRunLease,
+  releaseAgentRunLease,
+  AgentRunLeaseConflictError,
+  type AgentRunLease,
+} from "@/services/agent/runLease";
+import type { RagQueryError } from "@/lib/knowledge/retrieveKnowledgeSources";
+import { writeWorkspaceText } from "@/services/workspace/sessionWorkspace";
+import { getResearchToolEmitters } from "@/services/research/runtime";
+import { DEEP_RESEARCH_QUERY_MAX_CHARS } from "@/lib/research/toolArguments";
+import { type ResearchBudgetPreset } from "@/lib/research/types";
+import {
+  ChatStreamEventError,
+  ChatStreamSizeLimitError,
+  ChatStreamTimeoutError,
+  IncompleteChatStreamError,
+  createAbortError,
+  createChatStreamEventError,
+  isAbortError,
+} from "./chat/streamErrors";
+import {
+  createConfirmationFailureToolCall,
+  createRejectedToolCall,
+  waitForToolConfirmation,
+} from "./chat/toolConfirmation";
+import {
+  streamGenerateContent,
+  streamGenerateToolCall,
+} from "./chat/simpleGeneration";
+import {
+  performBackgroundMemoryExtraction,
+  performMemoryDream,
+} from "./chat/memoryProcessing";
+import {
+  performBackgroundCompression,
+  prepareHistoryForLLM,
+} from "./chat/compression";
+import {
+  executeCode,
+  generateChatTitle,
+  generateImage,
+  generateRAGSearchQueries,
+  generateRelatedQuestions,
+} from "./chat/auxiliaryRequests";
+
+type ChatUsagePayload = { usage?: unknown; usageMetadata?: unknown };
+const MAX_CHAT_TOOLS_PER_REQUEST = 64;
+
+interface NormalizedRoundUsage {
+  format: "openai" | "gemini";
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
+function finiteTokenCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.trunc(value))
+    : 0;
+}
+
+function normalizeRoundUsage(
+  payload: ChatUsagePayload,
+): NormalizedRoundUsage | null {
+  if (payload.usage && typeof payload.usage === "object") {
+    const usage = payload.usage as Record<string, unknown>;
+    const promptTokens = finiteTokenCount(usage.prompt_tokens);
+    const completionTokens = finiteTokenCount(usage.completion_tokens);
+    return {
+      format: "openai",
+      promptTokens,
+      completionTokens,
+      totalTokens: Math.max(
+        promptTokens + completionTokens,
+        finiteTokenCount(usage.total_tokens),
+      ),
+    };
+  }
+  if (payload.usageMetadata && typeof payload.usageMetadata === "object") {
+    const usage = payload.usageMetadata as Record<string, unknown>;
+    const promptTokens = finiteTokenCount(usage.promptTokenCount);
+    const completionTokens = finiteTokenCount(usage.candidatesTokenCount);
+    return {
+      format: "gemini",
+      promptTokens,
+      completionTokens,
+      totalTokens: Math.max(
+        promptTokens + completionTokens,
+        finiteTokenCount(usage.totalTokenCount),
+      ),
+    };
+  }
+  return null;
+}
+
+function toUsagePayload(usage: NormalizedRoundUsage): ChatUsagePayload {
+  return usage.format === "openai"
+    ? {
+        usage: {
+          prompt_tokens: usage.promptTokens,
+          completion_tokens: usage.completionTokens,
+          total_tokens: usage.totalTokens,
+        },
+      }
+    : {
+        usageMetadata: {
+          promptTokenCount: usage.promptTokens,
+          candidatesTokenCount: usage.completionTokens,
+          totalTokenCount: usage.totalTokens,
+        },
+      };
+}
+
+function toLegacyRisk(policy: ToolInvocationPolicy): PluginFunctionRisk {
+  if (
+    policy.effects.includes("local_destructive") ||
+    policy.effects.includes("external_destructive")
+  ) {
+    return "destructive";
+  }
+  if (policy.effects.includes("external_write")) return "write";
+  if (policy.origin === "mcp") return "external";
+  if (policy.effects.includes("local_write")) return "write";
+  return "read";
+}
+
+function getToolResultTrust(policy: ToolInvocationPolicy): ToolResultTrust {
+  return policy.origin === "builtin" &&
+    !policy.effects.some((effect) =>
+      ["network_read", "external_write", "external_destructive"].includes(
+        effect,
+      ),
+    )
+    ? "internal"
+    : "external_untrusted";
+}
+
+function createRuntimeToolFailure(
+  toolName: string,
+  error: { code: string; message: string; recoverable: boolean },
+) {
+  return normalizeToolResultEnvelope(
+    { ok: false, error },
+    {
+      trust: "internal",
+      provenance: {
+        origin: "runtime",
+        toolName,
+        retrievedAt: Date.now(),
+      },
+    },
+  );
+}
+
+function getToolTargetScope(args: unknown): string {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return "*";
+  const input = args as Record<string, unknown>;
+  for (const key of ["url", "uri", "baseUrl"]) {
+    const value = input[key];
+    if (typeof value !== "string") continue;
+    try {
+      const url = new URL(value);
+      if (url.protocol === "http:" || url.protocol === "https:") {
+        url.hash = "";
+        const redacted = redactSensitiveToolArgs(url.toString());
+        return typeof redacted === "string" ? redacted : url.origin;
+      }
+    } catch {
+      // Continue to path/resource scopes.
+    }
+  }
+  for (const key of ["path", "from", "to"]) {
+    const value = input[key];
+    if (typeof value === "string" && value.trim()) {
+      return `workspace:${value.trim().slice(0, 512)}`;
+    }
+  }
+  const resourceId = input.id;
+  return typeof resourceId === "string" && resourceId.trim()
+    ? `resource:${resourceId.trim().slice(0, 512)}`
+    : "*";
+}
+
+export {
+  ChatStreamEventError,
+  ChatStreamSizeLimitError,
+  ChatStreamTimeoutError,
+  IncompleteChatStreamError,
+  streamGenerateContent,
+  streamGenerateToolCall,
+  performBackgroundMemoryExtraction,
+  performMemoryDream,
+  performBackgroundCompression,
+  prepareHistoryForLLM,
+  executeCode,
+  generateChatTitle,
+  generateImage,
+  generateRAGSearchQueries,
+  generateRelatedQuestions,
+};
+
+type ChatStreamRoundPayload = {
+  content: string;
+  reasoning: string;
+  toolCalls: ToolCall[];
+  usage?: NormalizedRoundUsage;
+};
+
+type ChatStreamRoundResult =
+  | (ChatStreamRoundPayload & { status: "done" })
+  | (ChatStreamRoundPayload & { status: "aborted"; error: Error })
+  | (ChatStreamRoundPayload & { status: "error"; error: Error })
+  | (ChatStreamRoundPayload & {
+      status: "incomplete";
+      error: IncompleteChatStreamError;
+    });
+
+// Export types
+export interface ModelInfo {
+  name: string;
+  displayName: string;
+  description: string;
+  providerName?: string;
+}
+
+export type AgentExecutionPhase = "idle" | "model" | "tool_execution";
+
+export type ChatExecutionWorkflow =
+  | { kind: "agent" }
+  | { kind: "research"; phase: "start" | "clarify" | "plan" | "execute" };
+
+const RESEARCH_SINGLE_SOURCE_READ_TOOLS = new Set([
+  "inspect_attachment",
+  "read_workspace_file",
+]);
+
+export class ResearchStartRequiredError extends Error {
+  readonly code = "RESEARCH_START_REQUIRED";
+  readonly recoverable = true;
+
+  constructor() {
+    super(
+      "Deep Research could not start because the selected model did not start the research workflow.",
+    );
+    this.name = "ResearchStartRequiredError";
+  }
+}
+
+export interface StreamChatResponseOptions {
+  /** Host-only final authorization, never part of serialized request payloads. */
+  beforeDispatch?: () => Promise<void>;
+  /** Host-frozen UI context for this request only, including compressed sources. */
+  intelligentUiSource?: { messageId: string; blockId: string; content: string };
+  executionWorkflow?: ChatExecutionWorkflow;
+  /** Unaugmented user request used when Auto restarts as isolated Research. */
+  researchLaunchMessage?: string;
+  /** Host-owned session default used for every new Research task. */
+  researchBudgetPreset?: ResearchBudgetPreset;
+  /** Task whose unapproved plan the clarify phase is refining. */
+  researchPendingTaskId?: string;
+  /** Internal-only native JSON Schema constraint for bounded model rounds. */
+  responseFormat?: StructuredResponseFormat;
+  disableTools?: boolean;
+  /** Keep bounded text workflows from starting native image planning or generation. */
+  disableImageGeneration?: boolean;
+  initialOutputBlocks?: MessageOutputBlock[];
+  resumeLongTextBlockId?: string;
+  knowledgeScope?: BuiltinKnowledgeScope;
+  /** Frozen workspace paths available to an approval-gated workflow. */
+  workspaceReadScope?: readonly string[];
+  onKnowledgeSources?: (sources: Source[], ragError?: RagQueryError) => void;
+  onSkillInvocation?: (invocation: AppliedSkillInvocation) => void;
+  /** Plugins referenced with `@`; their tools are registered and required. */
+  forcedPluginIds?: string[];
+  /** Skills the current session/Profile explicitly allows Agent mode to load. */
+  allowedSkillIds?: string[];
+  /** Optional Agent Profile allowlist. Empty means no additional restriction. */
+  allowedToolIds?: string[];
+  /** Treat an explicitly empty Tool allowlist as deny-all for a bounded workflow. */
+  enforceAllowedToolIds?: boolean;
+  /** Additional fail-closed effect boundary used by first-class workflows. */
+  allowedToolEffects?: ToolEffect[];
+  approvalMode?: ToolApprovalProfile;
+  agentBudget?: Partial<ResolvedAgentRunBudget>;
+  agentRun?: {
+    id: string;
+    userMessageId?: string;
+    modelMessageId?: string;
+  };
+  onChatModeChange?: (config: Partial<ChatConfig>, agentRunId?: string) => void;
+  resumeAgentRun?: boolean;
+  /** Preserve an aborted run as resumable instead of treating it as user stop. */
+  abortAgentRunAsInterrupted?: boolean;
+  /** Lets foreground controllers distinguish abortable model work from a read call that should finish committing. */
+  onAgentExecutionPhase?: (phase: AgentExecutionPhase) => void;
+  /** Checked after the current Tool batch commits and before another model round is dispatched. */
+  shouldPauseAfterToolBatch?: () => boolean;
+  userInputController?: AgentUserInputController;
+  memoryScopes?: AgentMemoryScope[];
+  memoryScopeIds?: {
+    workspace?: string;
+    agent?: string;
+    session?: string;
+  };
+  /** Shared, fail-closed query allowance for bounded Research stages. */
+  researchQueryBudget?: BuiltinResearchQueryBudget;
+  /** Shared, fail-closed full-source allowance for bounded Research stages. */
+  researchSourceBudget?: BuiltinResearchSourceBudget;
+  /** Specialized source definitions frozen at research approval. */
+  researchSourceContracts?: ResearchSourceContracts;
+}
+
+// Stream chat response from backend API
+export const streamChatResponse = async (
+  sessionId: string,
+  model: string,
+  history: Message[],
+  newMessage: string,
+  attachments: Attachment[],
+  config: Partial<ChatConfig>,
+  onChunk: (
+    text: string,
+    reasoning?: string,
+    outputBlocks?: MessageOutputBlock[],
+  ) => void,
+  userSystemInstruction?: string,
+  onSearchStatus?: (
+    isSearching: boolean,
+    results?: SearchStatusResults,
+  ) => void,
+  onToolUpdate?: (toolCalls: ToolCall[]) => void,
+  onImage?: (images: Attachment[]) => void,
+  onUsage?: (usage: ChatUsagePayload) => void,
+  signal?: AbortSignal,
+  activePlugins?: string[], // Add activePlugins parameter
+  skillsContext?: string,
+  onOutputBlocks?: (outputBlocks: MessageOutputBlock[]) => void,
+  toolConfirmationController?: ToolConfirmationController,
+  options?: StreamChatResponseOptions,
+): Promise<string> => {
+  const temporary = isTemporarySessionId(sessionId);
+  if (temporary) {
+    const lifetime = getTemporarySessionSignal(sessionId)!;
+    lifetime.throwIfAborted();
+    signal = signal ? AbortSignal.any([signal, lifetime]) : lifetime;
+    config = { ...config, ...TEMPORARY_CHAT_CONFIG };
+    attachments = [];
+    activePlugins = [];
+    skillsContext = "";
+    options = {
+      ...options,
+      executionWorkflow: undefined,
+      disableTools: true,
+      disableImageGeneration: true,
+      forcedPluginIds: [],
+      allowedSkillIds: [],
+      allowedToolIds: [],
+      enforceAllowedToolIds: true,
+      agentRun: undefined,
+      resumeAgentRun: false,
+      resumeLongTextBlockId: undefined,
+      knowledgeScope: undefined,
+      memoryScopes: [],
+      memoryScopeIds: {},
+      onChatModeChange: undefined,
+    };
+  }
+  const imageCompressionConfig = getImageCompressionConfig(
+    useSettingsStore.getState().system,
+  );
+  const { providerId, modelName } = parseModelString(model);
+
+  const { providers } = useCoreSettingsStore.getState();
+  const provider = providerId
+    ? providers.find((p) => p.id === providerId)
+    : providers.find((p) => p.enabled);
+
+  if (!provider) throw new Error("No provider available");
+  const selectedModelMetadata = resolveModelMetadata(modelName, providerId);
+  if (temporary && !supportsTextOutput(selectedModelMetadata)) {
+    throw new Error("Temporary conversations require a text-output model.");
+  }
+  const toolCallsSupported = supportsToolCalls(selectedModelMetadata);
+  const normalizedChatMode = normalizeChatMode(
+    config?.chatMode,
+    config?.useAgentMode,
+    config?.useDeepResearch,
+  );
+  const executionWorkflow: ChatExecutionWorkflow | undefined =
+    options?.executionWorkflow ??
+    (normalizedChatMode === "research"
+      ? { kind: "research", phase: "start" }
+      : normalizedChatMode === "agent"
+        ? { kind: "agent" }
+        : undefined);
+  const researchPhase =
+    executionWorkflow?.kind === "research"
+      ? executionWorkflow.phase
+      : undefined;
+  const researchModeEnabled = Boolean(researchPhase && toolCallsSupported);
+  const agentModeEnabled = Boolean(
+    executionWorkflow?.kind === "agent" && toolCallsSupported,
+  );
+  const orchestratedModeEnabled = agentModeEnabled || researchModeEnabled;
+  const automaticModeEnabled =
+    normalizedChatMode === "auto" &&
+    !orchestratedModeEnabled &&
+    toolCallsSupported &&
+    options?.disableTools !== true;
+  const executionRunEnabled =
+    agentModeEnabled ||
+    (researchModeEnabled &&
+      researchPhase !== "start" &&
+      Boolean(options?.agentRun?.id));
+  if (researchPhase && !toolCallsSupported) {
+    throw new Error(
+      "Deep Research requires a model with Tool Calling support.",
+    );
+  }
+  let agentRun: AgentRun | null = null;
+  if (executionRunEnabled) {
+    if (options?.resumeAgentRun && options.agentRun?.id) {
+      await useAgentRunStore.getState().loadSessionRuns(sessionId);
+      const existing =
+        useAgentRunStore.getState().runsById[options.agentRun.id];
+      if (!existing || existing.sessionId !== sessionId) {
+        throw new Error("The interrupted Agent run is no longer available.");
+      }
+      if (existing.status !== "interrupted") {
+        throw new Error(
+          existing.stop?.reason === "effect_unknown"
+            ? "The Agent run has an unknown side effect and cannot be resumed automatically."
+            : `Agent run ${existing.id} cannot resume from ${existing.status}.`,
+        );
+      }
+      agentRun = {
+        ...resumeInterruptedAgentRun(existing),
+        model,
+        workflowKind: researchModeEnabled ? "research" : "agent",
+        ...(options.agentRun.userMessageId
+          ? { userMessageId: options.agentRun.userMessageId }
+          : {}),
+        ...(options.agentRun.modelMessageId
+          ? { modelMessageId: options.agentRun.modelMessageId }
+          : {}),
+      };
+    } else {
+      agentRun = createAgentRun({
+        id: options?.agentRun?.id,
+        sessionId,
+        userMessageId: options?.agentRun?.userMessageId,
+        modelMessageId: options?.agentRun?.modelMessageId,
+        model,
+        workflowKind: researchModeEnabled ? "research" : "agent",
+        budget: options?.agentBudget,
+      });
+    }
+  }
+  const workspaceInternalReadScope = new Set(
+    researchModeEnabled
+      ? (agentRun?.toolExecutions ?? []).flatMap((execution) =>
+          (execution.resultRefs ?? []).flatMap((reference) =>
+            reference.kind === "workspace_file" &&
+            reference.id.startsWith("tool-results/")
+              ? [reference.id]
+              : [],
+          ),
+        )
+      : [],
+  );
+  let agentRunLease: AgentRunLease | undefined;
+  let agentRunUpdateQueue: Promise<void> = Promise.resolve();
+  const updateAgentRun = async (
+    update: (current: AgentRun) => AgentRun,
+  ): Promise<void> => {
+    if (!agentRun) return;
+    agentRunUpdateQueue = agentRunUpdateQueue
+      .catch(() => undefined)
+      .then(async () => {
+        if (!agentRun) return;
+        agentRun = update(agentRun);
+        await useAgentRunStore.getState().upsertRun(agentRun);
+        if (
+          agentRunLease &&
+          agentRun.status !== "completed" &&
+          agentRun.status !== "failed" &&
+          agentRun.status !== "cancelled"
+        ) {
+          try {
+            agentRunLease = checkpointAgentRunLease(agentRunLease);
+          } catch (error) {
+            agentRunLease = undefined;
+            throw error;
+          }
+        }
+      });
+    await agentRunUpdateQueue;
+  };
+  const requestedForcedPluginIds = researchModeEnabled
+    ? []
+    : mergeForcedPluginIds([], options?.forcedPluginIds);
+  if (
+    requestedForcedPluginIds.length > 0 &&
+    (options?.disableTools || !toolCallsSupported)
+  ) {
+    throw new ForcedPluginInvocationError(
+      "Forced plugins require an enabled model with tool-call support.",
+    );
+  }
+
+  let effectiveNewMessage = newMessage;
+  const { search } = useSettingsStore.getState();
+  const { language } = useCoreSettingsStore.getState();
+  let projectionLocale: string = language;
+  if (language === "auto") {
+    projectionLocale =
+      typeof document === "undefined"
+        ? "en"
+        : document.documentElement.lang || "en";
+  }
+  const searchConfig =
+    search.provider === "google" ? undefined : search.configs[search.provider];
+  const searchCompatibility = resolveEffectiveSearchCapability({
+    searchProvider: search.provider,
+    searchConfig,
+    modelProviderType: provider.type,
+    selectedModel: model,
+  });
+  const outputBlockBuilder = createMessageOutputBlockBuilder({
+    initialBlocks: options?.initialOutputBlocks,
+    enableIntelligentUi:
+      !researchPhase &&
+      useSettingsStore.getState().system.enableIntelligentUi !== false &&
+      Boolean(userSystemInstruction?.includes(INTELLIGENT_UI_PROMPT_MARKER)),
+  });
+  if (options?.resumeLongTextBlockId) {
+    outputBlockBuilder.resumeLongTextCapture(options.resumeLongTextBlockId);
+  }
+  const emitOutputBlocks = () => {
+    onOutputBlocks?.(outputBlockBuilder.getBlocks());
+  };
+  const completeAgentRun = async () => {
+    if (agentRun?.status !== "running") return;
+    if (outputBlockBuilder.completeTaskPlan()) {
+      emitOutputBlocks();
+    }
+    await updateAgentRun((current) =>
+      transitionAgentRunStatus(current, "completed", {
+        stop: { reason: "completed" },
+      }),
+    );
+  };
+  const emitBuiltinSearch = createBuiltinSearchAggregator({
+    upsertSearch: outputBlockBuilder.upsertSearch,
+    emitOutputBlocks,
+    onSearchStatus,
+  });
+  const emitBuiltinKnowledgeSources = createBuiltinKnowledgeAggregator({
+    onKnowledgeSources: options?.onKnowledgeSources,
+  });
+
+  if (config?.useSearch && !searchCompatibility.enabled) {
+    onSearchStatus?.(false, { sources: [], images: [] });
+    throw new Error(getSearchCompatibilityErrorMessage(searchCompatibility));
+  }
+
+  if (
+    config?.useSearch &&
+    !orchestratedModeEnabled &&
+    !automaticModeEnabled &&
+    onSearchStatus &&
+    searchCompatibility.mode === "external"
+  ) {
+    effectiveNewMessage = await runExternalSearchPreflight({
+      model,
+      modelName,
+      selectedModelMetadata,
+      providers,
+      history,
+      newMessage,
+      attachments,
+      signal,
+      beforeDispatch: options?.beforeDispatch,
+      generate: (model, prompt, onText, signal) =>
+        streamGenerateContent(
+          model,
+          prompt,
+          onText,
+          signal,
+          options?.beforeDispatch,
+        ),
+      onSearchStatus,
+      upsertSearchBlock: outputBlockBuilder.upsertSearch,
+      emitOutputBlocks,
+    });
+  }
+
+  // Get plugin tools if activePlugins is provided
+  const {
+    installedPlugins,
+    pluginConfigs,
+    installedSkills = [],
+  } = useSettingsStore.getState();
+  const allowedSkillIds = new Set(options?.allowedSkillIds || []);
+  const agentSkills = installedSkills.filter((skill) =>
+    allowedSkillIds.has(skill.id),
+  );
+  // Plugins referenced with `@` are registered and executable for this request
+  // even when they are toggled off for the session. Explicit refs go first so
+  // session plugins cannot consume the request tool budget ahead of them.
+  const effectiveActivePlugins = mergeForcedPluginIds(
+    requestedForcedPluginIds,
+    activePlugins,
+  );
+  const tools: ChatToolDefinition[] = [];
+  const toolNames = new Set<string>();
+  const registeredPluginFunctions = new Map<string, PluginFunction[]>();
+  const allowedToolIds = new Set(
+    researchPhase === "start"
+      ? ["start_deep_research"]
+      : researchPhase === "clarify"
+        ? ["adjust_research_plan", "confirm_research_plan"]
+        : options?.allowedToolIds || [],
+  );
+  const restrictTools =
+    researchPhase === "start" ||
+    researchPhase === "clarify" ||
+    allowedToolIds.size > 0 ||
+    options?.enforceAllowedToolIds === true;
+  const collectedBuiltinTools = collectBuiltinTools({
+    message: newMessage,
+    disabled: options?.disableTools || !toolCallsSupported,
+    agentModeEnabled,
+    automaticModeEnabled,
+    researchPhase,
+    useSearch: config?.useSearch === true,
+    searchMode: searchCompatibility.mode,
+    knowledgeScope: options?.knowledgeScope,
+    installedSkills: agentSkills,
+    memoryScopes: options?.memoryScopes,
+    memoryScopeIds: options?.memoryScopeIds,
+    workspaceAvailable: isAgentWorkspaceAvailable(),
+    researchQueryBudget: options?.researchQueryBudget,
+    researchSourceBudget: options?.researchSourceBudget,
+  });
+  const allowedToolEffects = new Set(options?.allowedToolEffects || []);
+  const restrictToolEffects = allowedToolEffects.size > 0;
+  const allowsEffects = (effects: readonly ToolEffect[]) =>
+    !restrictToolEffects ||
+    (effects.length > 0 &&
+      effects.every((effect) => allowedToolEffects.has(effect)));
+  const allowedBuiltinDefinitions = restrictTools
+    ? collectedBuiltinTools.definitions.filter((definition) => {
+        const binding = collectedBuiltinTools.bindingsByName.get(
+          definition.function.name,
+        );
+        return (
+          (definition.function.name === CHAT_MODE_SWITCH_TOOL_NAME ||
+            allowedToolIds.has(definition.function.name)) &&
+          Boolean(binding && allowsEffects(binding.descriptor.effects))
+        );
+      })
+    : collectedBuiltinTools.definitions.filter((definition) => {
+        const binding = collectedBuiltinTools.bindingsByName.get(
+          definition.function.name,
+        );
+        return Boolean(binding && allowsEffects(binding.descriptor.effects));
+      });
+  const builtinBindingsByName = new Map(
+    [...collectedBuiltinTools.bindingsByName].filter(
+      ([name, binding]) =>
+        (!restrictTools ||
+          name === CHAT_MODE_SWITCH_TOOL_NAME ||
+          allowedToolIds.has(name)) &&
+        allowsEffects(binding.descriptor.effects),
+    ),
+  );
+  tools.push(...allowedBuiltinDefinitions);
+  for (const name of builtinBindingsByName.keys()) {
+    toolNames.add(name);
+  }
+
+  const offeredPluginFunctionsByName = new Map<
+    string,
+    { plugin: Plugin; functionDef: PluginFunction }
+  >();
+  const discoverableToolEntries: DiscoverableToolEntry[] = [];
+
+  if (
+    !options?.disableTools &&
+    toolCallsSupported &&
+    effectiveActivePlugins.length > 0
+  ) {
+    if (agentModeEnabled || researchPhase === "execute") {
+      const activeMcpServers = effectiveActivePlugins.flatMap((pluginId) => {
+        const plugin = installedPlugins.find((item) => item.id === pluginId);
+        return plugin?.source === "mcp" ? [plugin] : [];
+      });
+      for (const binding of createMcpCapabilityBindings(activeMcpServers)) {
+        const name = binding.definition.function.name;
+        if (
+          tools.length >= MAX_CHAT_TOOLS_PER_REQUEST ||
+          toolNames.has(name) ||
+          (restrictTools && !allowedToolIds.has(name)) ||
+          !allowsEffects(binding.descriptor.effects)
+        ) {
+          continue;
+        }
+        builtinBindingsByName.set(name, binding);
+        tools.push(binding.definition);
+        toolNames.add(name);
+      }
+    }
+    const candidates = effectiveActivePlugins.flatMap((pluginId) => {
+      const plugin = installedPlugins.find((item) => item.id === pluginId);
+      if (!plugin) return [];
+      return getModelCallablePluginFunctions(plugin, pluginConfigs[pluginId])
+        .map((functionDef) => ({ plugin, functionDef }))
+        .filter(({ plugin: candidatePlugin, functionDef }) => {
+          if (!restrictToolEffects) return true;
+          const policy = getPluginFunctionInvocationPolicy(functionDef, {
+            origin: candidatePlugin.source === "mcp" ? "mcp" : "plugin",
+          });
+          return allowsEffects(policy.effects);
+        });
+    });
+    const nameCounts = candidates.reduce((counts, candidate) => {
+      counts.set(
+        candidate.functionDef.name,
+        (counts.get(candidate.functionDef.name) || 0) + 1,
+      );
+      return counts;
+    }, new Map<string, number>());
+    const claimedAliases = new Set(toolNames);
+    const createAlias = (pluginId: string, functionName: string) => {
+      const safeProvider =
+        pluginId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 24) || "provider";
+      const safeFunction = functionName
+        .replace(/[^a-zA-Z0-9_-]/g, "_")
+        .slice(0, 36);
+      const base = `${safeProvider}__${safeFunction}`.slice(0, 64);
+      let alias = base;
+      let suffix = 2;
+      while (claimedAliases.has(alias)) {
+        const marker = `_${suffix}`;
+        alias = `${base.slice(0, 64 - marker.length)}${marker}`;
+        suffix += 1;
+      }
+      return alias;
+    };
+
+    for (const { plugin, functionDef } of candidates) {
+      const hasCollision =
+        (nameCounts.get(functionDef.name) || 0) > 1 ||
+        claimedAliases.has(functionDef.name);
+      const offeredName = hasCollision
+        ? createAlias(plugin.id, functionDef.name)
+        : functionDef.name;
+      claimedAliases.add(offeredName);
+      const definition: ChatToolDefinition = {
+        type: "function",
+        function: {
+          name: offeredName,
+          description: functionDef.description,
+          parameters: functionDef.parameters,
+        },
+      };
+      offeredPluginFunctionsByName.set(offeredName, { plugin, functionDef });
+      if (
+        restrictTools &&
+        !requestedForcedPluginIds.includes(plugin.id) &&
+        !allowedToolIds.has(offeredName) &&
+        !allowedToolIds.has(functionDef.name)
+      ) {
+        continue;
+      }
+      discoverableToolEntries.push({
+        name: offeredName,
+        originalName: functionDef.name,
+        providerId: plugin.id,
+        providerTitle: plugin.title,
+        description: functionDef.description,
+        definition,
+      });
+    }
+
+    const loadEntries = (names: string[]) => {
+      const loaded: string[] = [];
+      const alreadyLoaded: string[] = [];
+      const unavailable: string[] = [];
+      for (const name of names) {
+        if (toolNames.has(name)) {
+          alreadyLoaded.push(name);
+          continue;
+        }
+        const entry = discoverableToolEntries.find(
+          (candidate) => candidate.name === name,
+        );
+        if (!entry || tools.length >= MAX_CHAT_TOOLS_PER_REQUEST) {
+          unavailable.push(name);
+          continue;
+        }
+        tools.push(entry.definition);
+        toolNames.add(name);
+        loaded.push(name);
+      }
+      return {
+        loaded,
+        alreadyLoaded,
+        unavailable,
+        capacityRemaining: Math.max(
+          0,
+          MAX_CHAT_TOOLS_PER_REQUEST - tools.length,
+        ),
+      };
+    };
+
+    if (agentModeEnabled && discoverableToolEntries.length > 0) {
+      for (const binding of createToolDiscoveryBindings({
+        entries: discoverableToolEntries,
+        isLoaded: (name) => toolNames.has(name),
+        load: loadEntries,
+      })) {
+        const name = binding.definition.function.name;
+        if (
+          tools.length >= MAX_CHAT_TOOLS_PER_REQUEST ||
+          toolNames.has(name) ||
+          (restrictTools && !allowedToolIds.has(name))
+        ) {
+          continue;
+        }
+        builtinBindingsByName.set(name, binding);
+        tools.push(binding.definition);
+        toolNames.add(name);
+      }
+    }
+
+    for (const pluginId of effectiveActivePlugins) {
+      const entries = discoverableToolEntries.filter(
+        (entry) => entry.providerId === pluginId,
+      );
+      const mustLoad =
+        !agentModeEnabled ||
+        requestedForcedPluginIds.includes(pluginId) ||
+        (restrictTools && entries.length > 0);
+      const loadedNames = mustLoad
+        ? [...loadEntries(entries.map((entry) => entry.name)).loaded]
+        : [];
+      registeredPluginFunctions.set(
+        pluginId,
+        entries
+          .filter((entry) => loadedNames.includes(entry.name))
+          .map((entry) => ({
+            ...offeredPluginFunctionsByName.get(entry.name)!.functionDef,
+            name: entry.name,
+          })),
+      );
+    }
+  }
+
+  const forcedPluginRequirements = requestedForcedPluginIds.map((pluginId) => {
+    const plugin = installedPlugins.find((item) => item.id === pluginId);
+    if (!plugin) {
+      throw new ForcedPluginInvocationError(
+        `Forced plugin "${pluginId}" is not installed.`,
+      );
+    }
+    const functions = registeredPluginFunctions.get(pluginId) || [];
+    if (functions.length === 0) {
+      throw new ForcedPluginInvocationError(
+        `Forced plugin "${plugin.title}" has no enabled tools available for this request.`,
+      );
+    }
+    return {
+      title: plugin.title,
+      functions,
+      toolNames: new Set(functions.map((fn) => fn.name)),
+    };
+  });
+
+  const hasAgentBuiltin = [...builtinBindingsByName.values()].some(
+    (binding) => binding.agentOnly,
+  );
+  const agentSystemInstruction =
+    agentModeEnabled && hasAgentBuiltin
+      ? appendAgentSystemInstruction(
+          userSystemInstruction,
+          buildAgentSystemInstruction({
+            toolNames: tools.map((tool) => tool.function.name),
+          }),
+        )
+      : userSystemInstruction;
+  const researchBudgetPreset = options?.researchBudgetPreset ?? "standard";
+  const workflowSystemInstruction =
+    researchPhase === "start"
+      ? [
+          userSystemInstruction,
+          `You are starting a first-class Deep Research workflow. Call start_deep_research exactly once with the user's research request and budgetPreset \"${researchBudgetPreset}\". Do not answer the research question, do not call any other tool, and do not claim that source access has begun.`,
+        ]
+          .filter(Boolean)
+          .join("\n\n")
+      : researchPhase === "clarify"
+        ? [
+            userSystemInstruction,
+            [
+              "A Deep Research plan is already on screen next to this conversation and is waiting for the user's approval. Your job is to settle the remaining requirements with the user in plain prose.",
+              options?.researchPendingTaskId
+                ? `The plan under discussion belongs to research task ${options.researchPendingTaskId}; always pass that exact taskId to the research tools.`
+                : "",
+              "Ask at most two concise questions at a time, and only about things that would materially change the scope, audience, time range, source permissions, or deliverable. If nothing material is open, say so briefly and ask the user to approve the plan.",
+              "Call adjust_research_plan when the user asks for a change to the plan. Call confirm_research_plan only after the user has explicitly approved starting the research; never approve on their behalf.",
+              "Do not answer the research question yourself, do not invent findings, and do not claim that source access has begun.",
+            ]
+              .filter(Boolean)
+              .join(" "),
+          ]
+            .filter(Boolean)
+            .join("\n\n")
+        : agentSystemInstruction;
+
+  // Providers receive the directive as guidance; the terminal checks below
+  // provide the fail-closed guarantee when a model ignores it.
+  const forcedToolDirective = buildForcedToolDirective(
+    forcedPluginRequirements.map((requirement) => ({
+      title: requirement.title,
+      functions: requirement.functions,
+    })),
+  );
+  const workflowWithForcedTools = forcedToolDirective
+    ? appendAgentSystemInstruction(
+        workflowSystemInstruction,
+        forcedToolDirective,
+      )
+    : workflowSystemInstruction;
+  let effectiveSystemInstruction = automaticModeEnabled
+    ? appendAgentSystemInstruction(
+        workflowWithForcedTools,
+        AUTO_MODE_SYSTEM_INSTRUCTION,
+      )
+    : workflowWithForcedTools;
+
+  if (
+    !researchModeEnabled &&
+    useSettingsStore.getState().system.enableIntelligentUi &&
+    effectiveSystemInstruction?.includes(INTELLIGENT_UI_PROMPT_MARKER)
+  ) {
+    const { buildActiveUiSourcePrompt } =
+      await import("@/lib/intelligentUi/sourceContext");
+    const sourcePrompt = await buildActiveUiSourcePrompt(sessionId).catch(
+      () => "",
+    );
+    if (sourcePrompt)
+      effectiveSystemInstruction = appendAgentSystemInstruction(
+        effectiveSystemInstruction,
+        sourcePrompt,
+      );
+  }
+
+  if (agentRun) {
+    const lease = acquireAgentRunLease({ sessionId, runId: agentRun.id });
+    if (!lease.acquired) {
+      agentRun = transitionAgentRunStatus(agentRun, "failed", {
+        stop: {
+          reason: "runtime_error",
+          error: {
+            code: "AGENT_RUN_LEASE_CONFLICT",
+            message: researchModeEnabled
+              ? "Another browser tab currently owns this Research session."
+              : "Another browser tab currently owns this Agent session.",
+            recoverable: true,
+          },
+        },
+      });
+      await useAgentRunStore.getState().upsertRun(agentRun);
+      throw new AgentRunLeaseConflictError(lease.holder);
+    }
+    agentRunLease = lease.lease;
+    await useAgentRunStore.getState().upsertRun(agentRun);
+  }
+
+  try {
+    const notifyAgentExecutionPhase = (phase: AgentExecutionPhase) => {
+      try {
+        options?.onAgentExecutionPhase?.(phase);
+      } catch {
+        // UI lifecycle observers must not change Agent execution semantics.
+      }
+    };
+    const allToolCalls: ToolCall[] = [];
+    const assertForcedPluginsCalled = () => {
+      const missing = forcedPluginRequirements.filter(
+        (requirement) =>
+          !allToolCalls.some(
+            (toolCall) =>
+              requirement.toolNames.has(toolCall.name) &&
+              toolCall.status !== "skipped",
+          ),
+      );
+      if (missing.length === 0) return;
+
+      const titles = missing
+        .map((requirement) => `"${requirement.title}"`)
+        .join(", ");
+      throw new ForcedPluginInvocationError(
+        `Forced plugin${missing.length === 1 ? "" : "s"} ${titles} ${
+          missing.length === 1 ? "was" : "were"
+        } not called.`,
+      );
+    };
+    let committedContent = "";
+    let committedReasoning = "";
+    const uiSource = options?.intelligentUiSource;
+    let requestHistory =
+      researchPhase === "start" || researchPhase === "plan"
+        ? []
+        : await stripMessagesDisplayCacheForModel(
+            await Promise.all(
+              history.map(async (message) => {
+                if (message.role !== "model") return message;
+                const hasUiBlocks = message.outputBlocks?.some(
+                  (block) => block.type === "intelligent_ui",
+                );
+                const outputBlocks = await Promise.all(
+                  (message.outputBlocks ?? []).map(async (block) => {
+                    if (block.type === "intelligent_ui") {
+                      // The requesting block belongs to current mandatory context,
+                      // so history trimming cannot lose or duplicate its snapshot.
+                      if (
+                        uiSource?.messageId === message.id &&
+                        uiSource.blockId === block.id
+                      )
+                        return {
+                          id: block.id,
+                          type: "text" as const,
+                          content: "",
+                        };
+                      const { resolveBlockUiProjectionData } =
+                        await import("@/lib/intelligentUi/sourceContext");
+                      const data = await resolveBlockUiProjectionData(
+                        block,
+                        sessionId,
+                        message.id,
+                        "model-continuation",
+                      ).catch(() => ({ sourceSummary: [] }));
+                      return {
+                        id: block.id,
+                        type: "text" as const,
+                        content: projectUiBlock(block, {
+                          purpose: "model-continuation",
+                          locale: projectionLocale,
+                          ...data,
+                        }),
+                      };
+                    }
+                    if (block.type === "text" && !block.presentation)
+                      return {
+                        ...block,
+                        content: projectUiText(block.content, {
+                          purpose: "model-continuation",
+                          locale: projectionLocale,
+                        }),
+                      };
+                    return block;
+                  }),
+                );
+                return {
+                  ...message,
+                  // The API schema and provider adapters consume content, not
+                  // outputBlocks. Use persisted state in transcript order.
+                  content: hasUiBlocks
+                    ? outputBlocks
+                        .filter((block) => block.type === "text")
+                        .map((block) => block.content)
+                        .filter(Boolean)
+                        .join("\n\n")
+                    : projectUiText(message.content, {
+                        purpose: "model-continuation",
+                        locale: projectionLocale,
+                      }),
+                  ...(message.outputBlocks ? { outputBlocks } : {}),
+                };
+              }),
+            ),
+          );
+    const withUiSource = (message: string) => {
+      if (!uiSource) return message;
+      const combined = `${message}\n\nInteractive interface context (host-reported data):\n${uiSource.content}`;
+      // Required context is never silently clipped by the input helper.
+      if (combined.length > API_INPUT_LIMITS.maxChatTextChars)
+        throw new ContextBudgetExceededError();
+      return combined;
+    };
+    const messageWithSkills = researchModeEnabled
+      ? effectiveNewMessage
+      : skillsContext?.trim()
+        ? appendContextToChatInput(effectiveNewMessage, skillsContext, {
+            separator: "\n\n",
+          })
+        : effectiveNewMessage;
+    let requestMessage = researchModeEnabled
+      ? messageWithSkills
+      : appendDiagramRequestInstructions(
+          appendHtmlVisualRequestInstructions(
+            messageWithSkills,
+            effectiveSystemInstruction,
+          ),
+          effectiveSystemInstruction,
+        );
+    let requestAttachments: Attachment[] = [];
+    if (researchPhase !== "start" && researchPhase !== "plan") {
+      const compressedRequestAttachments = await compressImageAttachments(
+        attachments,
+        imageCompressionConfig,
+        { signal },
+      );
+      requestAttachments = await stripAttachmentsDisplayCacheForModel(
+        compressedRequestAttachments,
+      );
+    }
+    let requestConfig: Partial<ChatConfig> = {
+      ...config,
+      useAgentMode: agentModeEnabled,
+      useDeepResearch: researchModeEnabled,
+      ...(researchModeEnabled && researchPhase !== "execute"
+        ? { useSearch: false }
+        : {}),
+    };
+    delete requestConfig.chatMode;
+    let requestTools = tools;
+    const maxToolRounds =
+      agentRun?.budget.maxToolRounds ?? PLUGIN_EXECUTION_LIMITS.maxToolRounds;
+    const maxTotalToolCalls =
+      agentRun?.budget.maxToolCalls ??
+      PLUGIN_EXECUTION_LIMITS.maxTotalToolCalls;
+    let executedToolCallCount = 0;
+    let cumulativeUsage: NormalizedRoundUsage | null = null;
+    const functionFingerprintCache = new Map<string, Promise<string>>();
+    const pendingSkillInvocations = new Map<string, AppliedSkillInvocation>();
+    const emittedSkillIds = new Set<string>();
+    let requestedChatMode: Extract<ChatMode, "agent" | "research"> | null =
+      null;
+    let skillAllowedToolNames: Set<string> | null = null;
+    const compactLargeToolResult = async (
+      toolCall: ToolCall,
+      value: unknown,
+    ): Promise<{
+      value: unknown;
+      resultRef?: { kind: "workspace_file"; id: string; contentHash: string };
+    }> => {
+      if (!executionRunEnabled) return { value };
+      let serialized: string;
+      try {
+        serialized = JSON.stringify(value, null, 2);
+      } catch {
+        return { value };
+      }
+      if (serialized.length <= 48_000) return { value };
+
+      const safeCallId =
+        toolCall.id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 80) || uuidv7();
+      const path = `tool-results/${safeCallId}.json`;
+      const written = await writeWorkspaceText(
+        sessionId,
+        path,
+        serialized,
+        "create",
+      );
+      if (!written.ok) {
+        return {
+          value: {
+            truncated: true,
+            summary:
+              "The tool returned a large result that could not be persisted in the workspace.",
+            excerpt: serialized.slice(0, 8_000),
+            originalCharacters: serialized.length,
+          },
+        };
+      }
+      if (researchModeEnabled) workspaceInternalReadScope.add(path);
+      return {
+        value: {
+          truncated: true,
+          summary: `Large tool result stored in workspace file ${path}.`,
+          workspacePath: path,
+          revision: written.value.revision,
+          contentHash: written.value.contentHash,
+          originalCharacters: serialized.length,
+          excerpt: serialized.slice(0, 4_000),
+        },
+        resultRef: {
+          kind: "workspace_file",
+          id: path,
+          contentHash: written.value.contentHash,
+        },
+      };
+    };
+
+    if (
+      !researchModeEnabled &&
+      !options?.disableImageGeneration &&
+      requestConfig.imageCount === undefined &&
+      supportsImageGeneration(selectedModelMetadata)
+    ) {
+      const availableModels = providers
+        .filter((item) => item.enabled)
+        .flatMap((item) =>
+          item.models.map((availableModelName) => ({
+            id: `${item.id}:${availableModelName}`,
+            metadata: resolveModelMetadata(availableModelName, item.id),
+          })),
+        );
+      const imageOptions = await resolveImageGenerationOptions({
+        userMessage: newMessage,
+        selectedModel: model,
+        selectedModelMetadata,
+        defaultPromptOptimizationModel: getTaskModel("promptOptimization"),
+        availableModels,
+        generate: (planningModel, prompt) =>
+          streamGenerateContent(
+            planningModel,
+            prompt,
+            () => {},
+            signal,
+            options?.beforeDispatch,
+          ),
+      });
+      requestConfig = { ...requestConfig, ...imageOptions };
+    }
+
+    if (
+      !researchModeEnabled &&
+      !options?.disableImageGeneration &&
+      isOpenAIProviderType(provider.type) &&
+      supportsImageGeneration(selectedModelMetadata) &&
+      (!supportsTextOutput(selectedModelMetadata) ||
+        modelName.toLowerCase().startsWith("gpt-image-"))
+    ) {
+      assertForcedPluginsCalled();
+      boundHistoryForRequest([], {
+        newMessage: withUiSource(requestMessage),
+        attachments: requestAttachments,
+        systemInstruction: effectiveSystemInstruction,
+        tools,
+        modelInputTokenLimit: selectedModelMetadata?.limit?.context,
+        reservedOutputTokens: selectedModelMetadata?.limit?.output,
+      });
+      const loadingBlockId = outputBlockBuilder.appendImageGenerationStatus();
+      emitOutputBlocks();
+
+      let images: Attachment[];
+      let message: string;
+      try {
+        const result = await generateImage(
+          model,
+          withUiSource(requestMessage),
+          {
+            imageCount: requestConfig.imageCount,
+            attachments: requestAttachments,
+          },
+          signal,
+          options?.beforeDispatch,
+        );
+        images = result.images;
+        message = result.message;
+      } catch (error) {
+        if (outputBlockBuilder.clearImageGenerationStatus(loadingBlockId)) {
+          emitOutputBlocks();
+        }
+        throw error;
+      }
+
+      outputBlockBuilder.clearImageGenerationStatus(loadingBlockId);
+
+      if (images.length > 0) {
+        for (const image of images) {
+          outputBlockBuilder.appendImage(image);
+        }
+        onChunk(
+          committedContent,
+          committedReasoning,
+          outputBlockBuilder.getBlocks(),
+        );
+        await completeAgentRun();
+        return committedContent;
+      }
+
+      outputBlockBuilder.appendText(message);
+      onChunk(
+        committedContent + message,
+        committedReasoning,
+        outputBlockBuilder.getBlocks(),
+      );
+      await completeAgentRun();
+      return committedContent + message;
+    }
+
+    const emitToolCalls = () => {
+      onToolUpdate?.([...allToolCalls]);
+    };
+
+    const upsertToolCall = (toolCall: ToolCall) => {
+      if (toolCall.name === CHAT_MODE_SWITCH_TOOL_NAME) return;
+      const index = allToolCalls.findIndex((tc) => tc.id === toolCall.id);
+      if (index === -1) {
+        allToolCalls.push(toolCall);
+      } else {
+        allToolCalls[index] = { ...allToolCalls[index], ...toolCall };
+      }
+      emitToolCalls();
+    };
+
+    let longTextCaptureToolCallId: string | undefined;
+    const failLongTextCapture = (code: string, message: string) => {
+      const captureState = outputBlockBuilder.getLongTextCaptureState();
+      if (!captureState.pending && !captureState.activeBlockId) return;
+
+      outputBlockBuilder.cancelPendingLongTextCapture();
+      outputBlockBuilder.finalizeLongTextCapture();
+      const current = longTextCaptureToolCallId
+        ? allToolCalls.find(
+            (toolCall) => toolCall.id === longTextCaptureToolCallId,
+          )
+        : undefined;
+      if (current) {
+        const failed: ToolCall = {
+          ...current,
+          status: "error",
+          isError: true,
+          errorInfo: { code, message, recoverable: true },
+          result: createRuntimeToolFailure(current.name, {
+            code,
+            message,
+            recoverable: true,
+          }),
+        };
+        outputBlockBuilder.updateToolCall(failed);
+        upsertToolCall(failed);
+      }
+      emitOutputBlocks();
+    };
+
+    const runRound = async (): Promise<ChatStreamRoundResult> => {
+      const roundRequestMessage = withUiSource(requestMessage);
+      const boundedRequestHistory = boundHistoryForRequest(requestHistory, {
+        newMessage: roundRequestMessage,
+        attachments: requestAttachments,
+        modelInputTokenLimit: selectedModelMetadata?.limit?.context,
+        reservedOutputTokens: selectedModelMetadata?.limit?.output,
+        systemInstruction: effectiveSystemInstruction,
+        tools: requestTools,
+      });
+      const requestPayload = {
+        modelName,
+        history: boundedRequestHistory,
+        newMessage: roundRequestMessage,
+        attachments: requestAttachments,
+        config: requestConfig,
+        systemInstruction: effectiveSystemInstruction,
+        ...(options?.responseFormat
+          ? { responseFormat: options.responseFormat }
+          : {}),
+        tools: requestTools,
+        enableImageGeneration:
+          !researchModeEnabled &&
+          !options?.disableImageGeneration &&
+          supportsImageGeneration(selectedModelMetadata) &&
+          (provider.type === "OpenAI" || isGoogleProviderType(provider.type)),
+        enableGoogleSearch:
+          requestConfig?.useSearch &&
+          !orchestratedModeEnabled &&
+          searchCompatibility.mode === "gemini-google",
+        enableOpenAIWebSearch:
+          requestConfig?.useSearch &&
+          !orchestratedModeEnabled &&
+          searchCompatibility.mode === "openai-web",
+      };
+
+      let fullContent = "";
+      let fullReasoning = "";
+      const roundToolCalls: ToolCall[] = [];
+      let roundUsage: NormalizedRoundUsage | null = null;
+
+      const getRoundPayload = (): ChatStreamRoundPayload => ({
+        content: fullContent,
+        reasoning: fullReasoning,
+        toolCalls: roundToolCalls,
+        ...(roundUsage ? { usage: roundUsage } : {}),
+      });
+
+      const handleMessage = async (parsed: any) => {
+        if (temporary) signal?.throwIfAborted();
+        switch (parsed.type) {
+          case "content":
+            if (researchPhase === "start") return false;
+            fullContent += parsed.content;
+            outputBlockBuilder.appendText(parsed.content);
+            onChunk(
+              committedContent + fullContent,
+              committedReasoning + fullReasoning,
+              outputBlockBuilder.getBlocks(),
+            );
+            return false;
+
+          case "reasoning":
+            if (researchPhase === "start") return false;
+            fullReasoning += parsed.content;
+            outputBlockBuilder.appendReasoning(parsed.content);
+            onChunk(
+              committedContent + fullContent,
+              committedReasoning + fullReasoning,
+              outputBlockBuilder.getBlocks(),
+            );
+            return false;
+
+          case "tool_call": {
+            const captureState = outputBlockBuilder.getLongTextCaptureState();
+            if (captureState.pending || captureState.activeBlockId) {
+              failLongTextCapture(
+                "LONG_TEXT_OUTPUT_NESTED_TOOL_CALL",
+                "The document body attempted another tool call instead of returning only text.",
+              );
+              throw new ChatStreamEventError(
+                "The long text document body attempted an unexpected tool call.",
+                "LONG_TEXT_OUTPUT_NESTED_TOOL_CALL",
+              );
+            }
+            const toolCall: ToolCall = {
+              id: parsed.toolCall?.id || uuidv7(),
+              name: parsed.toolCall?.name,
+              args: parsed.toolCall?.args ?? {},
+              status: parsed.toolCall?.status || "pending",
+            };
+            roundToolCalls.push(toolCall);
+            if (toolCall.name !== CHAT_MODE_SWITCH_TOOL_NAME) {
+              outputBlockBuilder.appendToolCall(toolCall);
+              emitOutputBlocks();
+            }
+            upsertToolCall(toolCall);
+            return false;
+          }
+
+          case "tool_result":
+            if (parsed.toolCall) {
+              if (parsed.toolCall.name !== CHAT_MODE_SWITCH_TOOL_NAME) {
+                outputBlockBuilder.updateToolCall(parsed.toolCall);
+                emitOutputBlocks();
+              }
+              upsertToolCall(parsed.toolCall);
+            }
+            return false;
+
+          case "search":
+            outputBlockBuilder.upsertSearch({
+              isSearching: parsed.isSearching,
+              results: parsed.results,
+            });
+            onSearchStatus?.(parsed.isSearching, parsed.results);
+            emitOutputBlocks();
+            return false;
+
+          case "image":
+            if (temporary) return false;
+            if (parsed.image) {
+              const [image] = await prepareGeneratedImageAttachments(
+                [parsed.image],
+                imageCompressionConfig,
+                { signal },
+              );
+              outputBlockBuilder.appendImage(image);
+              onChunk(
+                committedContent + fullContent,
+                committedReasoning + fullReasoning,
+                outputBlockBuilder.getBlocks(),
+              );
+            }
+            return false;
+
+          case "usage": {
+            const nextUsage = normalizeRoundUsage({
+              ...(parsed.usage ? { usage: parsed.usage } : {}),
+              ...(parsed.usageMetadata
+                ? { usageMetadata: parsed.usageMetadata }
+                : {}),
+            });
+            if (nextUsage) {
+              const priorRound = roundUsage;
+              const priorCumulative =
+                cumulativeUsage?.format === nextUsage.format
+                  ? cumulativeUsage
+                  : null;
+              cumulativeUsage = {
+                format: nextUsage.format,
+                promptTokens:
+                  (priorCumulative?.promptTokens ?? 0) -
+                  (priorRound?.promptTokens ?? 0) +
+                  nextUsage.promptTokens,
+                completionTokens:
+                  (priorCumulative?.completionTokens ?? 0) -
+                  (priorRound?.completionTokens ?? 0) +
+                  nextUsage.completionTokens,
+                totalTokens:
+                  (priorCumulative?.totalTokens ?? 0) -
+                  (priorRound?.totalTokens ?? 0) +
+                  nextUsage.totalTokens,
+              };
+              roundUsage = nextUsage;
+              onUsage?.(toUsagePayload(cumulativeUsage));
+            }
+            return false;
+          }
+
+          case "error":
+            throw createChatStreamEventError(parsed);
+
+          case "done":
+            if (outputBlockBuilder.finalizeIntelligentUi()) emitOutputBlocks();
+            if (outputBlockBuilder.finalizeActiveReasoning()) {
+              emitOutputBlocks();
+            }
+            return true;
+
+          default:
+            return false;
+        }
+      };
+
+      // 直连：由浏览器直接请求 provider，逐条消费 runChatStream 产生的消息
+      if (shouldUseDirectCall(provider)) {
+        // send 是同步的，而 handleMessage 可能异步（图片附件），串行排队保证顺序
+        let pump: Promise<boolean> = Promise.resolve(false);
+        let pumpError: unknown = null;
+
+        const send = (message: any) => {
+          pump = pump.then(async (done) => {
+            if (done || pumpError) return true;
+            try {
+              return await handleMessage(message);
+            } catch (error) {
+              pumpError = error;
+              return true;
+            }
+          });
+        };
+
+        try {
+          const [{ runChatStream }, runtime, directProvider] =
+            await Promise.all([
+              import("@/lib/chat/runChatStream"),
+              getBrowserProviderRuntime(),
+              buildDirectProviderConfig(provider),
+            ]);
+          const directImages = await hydrateDirectProviderImageFiles(
+            requestPayload.history,
+            requestPayload.attachments,
+            { signal },
+          );
+
+          await options?.beforeDispatch?.();
+          await runChatStream({
+            ...requestPayload,
+            beforeDispatch: options?.beforeDispatch,
+            history: directImages.history,
+            attachments: directImages.attachments,
+            provider: directProvider,
+            signal,
+            runtime,
+            send,
+          });
+          await pump;
+          if (pumpError) throw pumpError;
+
+          if (signal?.aborted) {
+            return {
+              status: "aborted",
+              error: createAbortError(signal),
+              ...getRoundPayload(),
+            };
+          }
+
+          if (outputBlockBuilder.finalizeActiveReasoning()) {
+            emitOutputBlocks();
+          }
+          return { status: "done", ...getRoundPayload() };
+        } catch (error) {
+          await pump.catch(() => undefined);
+          const normalizedError = describeDirectCallError(error, provider);
+          if (isAbortError(normalizedError, signal)) {
+            return {
+              status: "aborted",
+              error: createAbortError(signal),
+              ...getRoundPayload(),
+            };
+          }
+          return {
+            status: "error",
+            error: normalizedError,
+            ...getRoundPayload(),
+          };
+        }
+      }
+
+      const response = await fetchWithByokRetry(async () => {
+        const request = await createChatRequestBody(
+          {
+            ...requestPayload,
+            provider: await buildProviderRuntimeConfig(provider, signal),
+          },
+          { signal },
+        );
+        return signedApiFetch(
+          "/api/chat",
+          {
+            method: "POST",
+            headers: request.headers,
+            body: request.body,
+            signal,
+          },
+          options?.beforeDispatch,
+        );
+      });
+
+      const contentType = response.headers.get("content-type");
+      const isSSE = contentType?.includes("text/event-stream");
+
+      if (!response.ok && !isSSE) {
+        throw new Error(
+          await getResponseErrorMessage(response, "Stream request failed"),
+        );
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("No response body");
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      const handleEventData = async (data: string) => {
+        if (!data) return false;
+        if (data === "[DONE]") return true;
+        return handleMessage(JSON.parse(data));
+      };
+
+      const processSSEEvent = async (event: string) => {
+        const dataLines = event
+          .split("\n")
+          .filter((line) => line.startsWith("data: "))
+          .map((line) => line.slice(6));
+
+        if (dataLines.length === 0) return false;
+
+        try {
+          return await handleEventData(dataLines.join("\n"));
+        } catch (eventError) {
+          if (eventError instanceof SyntaxError) {
+            throw new ChatStreamEventError(
+              "The response stream contained malformed data.",
+              "MALFORMED_CHAT_STREAM",
+            );
+          }
+          throw eventError;
+        }
+      };
+
+      const cancelReader = () => {
+        void reader.cancel(signal?.reason).catch(() => undefined);
+      };
+      signal?.addEventListener("abort", cancelReader, { once: true });
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const events = buffer.split("\n\n");
+          buffer = events.pop() || "";
+
+          for (const event of events) {
+            const isDone = await processSSEEvent(event);
+            if (isDone) {
+              await reader.cancel().catch(() => undefined);
+              return { status: "done", ...getRoundPayload() };
+            }
+          }
+        }
+
+        if (buffer.trim()) {
+          const isDone = await processSSEEvent(buffer);
+          if (isDone) {
+            await reader.cancel().catch(() => undefined);
+            return { status: "done", ...getRoundPayload() };
+          }
+        }
+
+        if (signal?.aborted) {
+          return {
+            status: "aborted",
+            error: createAbortError(signal),
+            ...getRoundPayload(),
+          };
+        }
+
+        if (outputBlockBuilder.finalizeActiveReasoning()) {
+          emitOutputBlocks();
+        }
+        return {
+          status: "incomplete",
+          error: new IncompleteChatStreamError(),
+          ...getRoundPayload(),
+        };
+      } catch (error) {
+        await reader.cancel().catch(() => undefined);
+        const normalizedError =
+          error instanceof Error ? error : new Error(String(error));
+        if (isAbortError(normalizedError, signal)) {
+          return {
+            status: "aborted",
+            error: createAbortError(signal),
+            ...getRoundPayload(),
+          };
+        }
+        return {
+          status: "error",
+          error: normalizedError,
+          ...getRoundPayload(),
+        };
+      } finally {
+        signal?.removeEventListener("abort", cancelReader);
+      }
+    };
+
+    for (let round = 0; round <= maxToolRounds; round++) {
+      notifyAgentExecutionPhase("model");
+      const offeredToolNamesForRound = new Set(
+        requestTools.map((tool) => tool.function.name),
+      );
+      const result = await runRound();
+      if (result.status !== "done") {
+        const captureState = outputBlockBuilder.getLongTextCaptureState();
+        if (captureState.pending) {
+          failLongTextCapture(
+            "LONG_TEXT_OUTPUT_MISSING_BODY",
+            "The model did not return a document body after starting long text output.",
+          );
+        } else if (captureState.activeBlockId) {
+          outputBlockBuilder.finalizeLongTextCapture();
+          emitOutputBlocks();
+        }
+        throw result.error;
+      }
+      let pendingToolCalls = result.toolCalls.filter(
+        (toolCall) =>
+          toolCall.name &&
+          (toolCall.status === "pending" ||
+            toolCall.status === "running" ||
+            toolCall.result === undefined),
+      );
+      const modeSwitchToolCall = pendingToolCalls.find(
+        (toolCall) => toolCall.name === CHAT_MODE_SWITCH_TOOL_NAME,
+      );
+      if (modeSwitchToolCall) {
+        pendingToolCalls
+          .filter((toolCall) => toolCall.id !== modeSwitchToolCall.id)
+          .forEach((toolCall) => {
+            const skipped: ToolCall = {
+              ...toolCall,
+              status: "skipped",
+              isError: true,
+              result: createRuntimeToolFailure(toolCall.name, {
+                code: "CHAT_MODE_SWITCH_RESTART",
+                message:
+                  "This tool call was deferred until the selected chat mode restarts the request.",
+                recoverable: true,
+              }),
+            };
+            outputBlockBuilder.updateToolCall(skipped);
+            upsertToolCall(skipped);
+          });
+        pendingToolCalls = [modeSwitchToolCall];
+      }
+      if (researchPhase === "start") {
+        let normalizedStartCall = false;
+        pendingToolCalls = pendingToolCalls.map((toolCall) => {
+          if (toolCall.name !== "start_deep_research") return toolCall;
+          const args =
+            toolCall.args && typeof toolCall.args === "object"
+              ? toolCall.args
+              : {};
+          if (args.budgetPreset === researchBudgetPreset) return toolCall;
+          const normalized = {
+            ...toolCall,
+            args: { ...args, budgetPreset: researchBudgetPreset },
+          };
+          outputBlockBuilder.updateToolCall(normalized);
+          upsertToolCall(normalized);
+          normalizedStartCall = true;
+          return normalized;
+        });
+        if (normalizedStartCall) emitOutputBlocks();
+      }
+      if (agentRun) {
+        const usage = result.usage;
+        await updateAgentRun((current) =>
+          recordAgentRoundCompleted(current, {
+            promptTokens: usage?.promptTokens,
+            completionTokens: usage?.completionTokens,
+            totalTokens: usage?.totalTokens,
+            hasToolCalls: pendingToolCalls.length > 0,
+          }),
+        );
+      }
+
+      if (pendingToolCalls.length === 0 && researchPhase === "start") {
+        const query = (
+          options?.researchLaunchMessage?.trim() || newMessage.trim()
+        ).slice(0, DEEP_RESEARCH_QUERY_MAX_CHARS);
+        if (query) {
+          const fallbackStartCall: ToolCall = {
+            id: uuidv7(),
+            name: "start_deep_research",
+            args: { query, budgetPreset: researchBudgetPreset },
+            status: "pending",
+          };
+          pendingToolCalls = [fallbackStartCall];
+          outputBlockBuilder.appendToolCall(fallbackStartCall);
+          emitOutputBlocks();
+          upsertToolCall(fallbackStartCall);
+        }
+      }
+
+      if (pendingToolCalls.length === 0) {
+        notifyAgentExecutionPhase("idle");
+        if (researchPhase === "start") {
+          throw new ResearchStartRequiredError();
+        }
+        const captureState = outputBlockBuilder.getLongTextCaptureState();
+        if (captureState.pending) {
+          failLongTextCapture(
+            "LONG_TEXT_OUTPUT_EMPTY_BODY",
+            "The model completed without returning the requested document body.",
+          );
+        } else if (captureState.activeBlockId) {
+          outputBlockBuilder.finalizeLongTextCapture();
+          emitOutputBlocks();
+        }
+        assertForcedPluginsCalled();
+        await completeAgentRun();
+        return committedContent + result.content;
+      }
+
+      const exceededBudget = agentRun
+        ? getExceededAgentRunBudget(agentRun)
+        : round >= maxToolRounds
+          ? "tool_rounds"
+          : null;
+      if (exceededBudget) {
+        notifyAgentExecutionPhase("idle");
+        pendingToolCalls.forEach((toolCall) => {
+          const skippedToolCall: ToolCall = {
+            ...toolCall,
+            status: "skipped",
+            isError: true,
+            result: createRuntimeToolFailure(toolCall.name, {
+              code: "AGENT_TOOL_ROUND_BUDGET_EXHAUSTED",
+              message:
+                "Tool execution was skipped because the maximum Tool-call rounds were reached.",
+              recoverable: true,
+            }),
+          };
+          outputBlockBuilder.updateToolCall(skippedToolCall);
+          emitOutputBlocks();
+          upsertToolCall(skippedToolCall);
+        });
+        if (agentRun?.status === "running") {
+          await updateAgentRun((current) =>
+            transitionAgentRunStatus(current, "failed", {
+              stop: {
+                reason: "budget_exhausted",
+                budgetDimension: exceededBudget,
+                error: {
+                  code: "AGENT_BUDGET_EXHAUSTED",
+                  message: `Agent execution reached its ${exceededBudget} budget.`,
+                  recoverable: true,
+                },
+              },
+            }),
+          );
+        }
+        return committedContent + result.content;
+      }
+
+      const remainingToolBudget = Math.max(
+        0,
+        maxTotalToolCalls - executedToolCallCount,
+      );
+      const toolCallsToExecute = pendingToolCalls.slice(0, remainingToolBudget);
+      const budgetSkippedToolCalls = pendingToolCalls
+        .slice(remainingToolBudget)
+        .map((toolCall): ToolCall => ({
+          ...toolCall,
+          status: "skipped",
+          isError: true,
+          result: createRuntimeToolFailure(toolCall.name, {
+            code: "AGENT_TOOL_CALL_BUDGET_EXHAUSTED",
+            message:
+              "Tool execution was skipped because the total Tool-call budget was reached.",
+            recoverable: true,
+          }),
+        }));
+      budgetSkippedToolCalls.forEach((toolCall) => {
+        outputBlockBuilder.updateToolCall(toolCall);
+        emitOutputBlocks();
+        upsertToolCall(toolCall);
+      });
+      executedToolCallCount += toolCallsToExecute.length;
+
+      const approvedToolCalls: ToolCall[] = [];
+      const nonExecutedToolCalls: ToolCall[] = [];
+
+      for (const toolCall of toolCallsToExecute) {
+        if (!offeredToolNamesForRound.has(toolCall.name)) {
+          const failed: ToolCall = {
+            ...toolCall,
+            status: "error",
+            isError: true,
+            errorInfo: {
+              code: "TOOL_FUNCTION_NOT_FOUND",
+              message: `Function ${toolCall.name} was not offered for this request.`,
+              recoverable: true,
+            },
+            result: createRuntimeToolFailure(toolCall.name, {
+              code: "TOOL_FUNCTION_NOT_FOUND",
+              message: `Function ${toolCall.name} was not offered for this request.`,
+              recoverable: true,
+            }),
+          };
+          outputBlockBuilder.updateToolCall(failed);
+          emitOutputBlocks();
+          upsertToolCall(failed);
+          nonExecutedToolCalls.push(failed);
+          continue;
+        }
+
+        const builtinBinding = builtinBindingsByName.get(toolCall.name);
+        const resolved = builtinBinding
+          ? null
+          : offeredPluginFunctionsByName.get(toolCall.name) || null;
+        if (!builtinBinding && !resolved) {
+          const failed: ToolCall = {
+            ...toolCall,
+            status: "error",
+            isError: true,
+            errorInfo: {
+              code: "TOOL_FUNCTION_NOT_FOUND",
+              message: `Function ${toolCall.name} is no longer available.`,
+              recoverable: true,
+            },
+            result: createRuntimeToolFailure(toolCall.name, {
+              code: "TOOL_FUNCTION_NOT_FOUND",
+              message: `Function ${toolCall.name} is no longer available.`,
+              recoverable: true,
+            }),
+          };
+          outputBlockBuilder.updateToolCall(failed);
+          emitOutputBlocks();
+          upsertToolCall(failed);
+          nonExecutedToolCalls.push(failed);
+          continue;
+        }
+
+        const parameters = builtinBinding
+          ? builtinBinding.definition.function.parameters
+          : resolved!.functionDef.parameters;
+        const validation = validateToolArguments(parameters, toolCall.args);
+        if (!validation.ok) {
+          const failed: ToolCall = {
+            ...toolCall,
+            ...(resolved
+              ? {
+                  pluginId: resolved.plugin.id,
+                  pluginTitle: resolved.plugin.title,
+                }
+              : {}),
+            status: "error",
+            isError: true,
+            errorInfo: {
+              code: validation.error.code,
+              message: validation.error.message,
+              recoverable: true,
+            },
+            result: createRuntimeToolFailure(toolCall.name, {
+              ...validation.error,
+              recoverable: true,
+            }),
+          };
+          outputBlockBuilder.updateToolCall(failed);
+          emitOutputBlocks();
+          upsertToolCall(failed);
+          nonExecutedToolCalls.push(failed);
+          continue;
+        }
+
+        const pluginId = resolved?.plugin.id || "builtin";
+        const pluginTitle = resolved?.plugin.title || "Agent built-ins";
+        const functionName = resolved?.functionDef.name || toolCall.name;
+        const policy = builtinBinding
+          ? resolveBuiltinToolInvocationPolicy(builtinBinding, toolCall.args)
+          : getPluginFunctionInvocationPolicy(resolved!.functionDef, {
+              args: toolCall.args,
+              origin: resolved!.plugin.source === "mcp" ? "mcp" : "plugin",
+            });
+        if (!allowsEffects(policy.effects)) {
+          const failed: ToolCall = {
+            ...toolCall,
+            pluginId,
+            pluginTitle,
+            status: "denied",
+            isError: true,
+            invocationPolicy: policy,
+            errorInfo: {
+              code: "TOOL_EFFECT_NOT_ALLOWED",
+              message: "The Tool effect is outside this workflow's policy.",
+              recoverable: false,
+            },
+            result: createRuntimeToolFailure(toolCall.name, {
+              code: "TOOL_EFFECT_NOT_ALLOWED",
+              message: "The Tool effect is outside this workflow's policy.",
+              recoverable: false,
+            }),
+          };
+          outputBlockBuilder.updateToolCall(failed);
+          emitOutputBlocks();
+          upsertToolCall(failed);
+          nonExecutedToolCalls.push(failed);
+          continue;
+        }
+        const risk = toLegacyRisk(policy);
+        let functionFingerprint: string;
+        if (resolved) {
+          const fingerprintCacheKey = `${pluginId}\u0000${functionName}`;
+          let fingerprintPromise =
+            functionFingerprintCache.get(fingerprintCacheKey);
+          if (!fingerprintPromise) {
+            fingerprintPromise = createPluginFunctionFingerprint(
+              resolved.plugin,
+              resolved.functionDef,
+            );
+            functionFingerprintCache.set(
+              fingerprintCacheKey,
+              fingerprintPromise,
+            );
+          }
+          functionFingerprint = await fingerprintPromise;
+        } else {
+          functionFingerprint = await hashToolArguments({
+            name: functionName,
+            descriptor: builtinBinding!.descriptor,
+          });
+        }
+
+        const argumentsHash = agentRun
+          ? await hashToolArguments(toolCall.args)
+          : undefined;
+        if (agentRun && argumentsHash) {
+          const priorWithSameArguments = agentRun.toolExecutions.find(
+            (record) =>
+              record.toolName === toolCall.name &&
+              record.argumentsHash === argumentsHash,
+          );
+          if (
+            priorWithSameArguments &&
+            priorWithSameArguments.definitionFingerprint !== functionFingerprint
+          ) {
+            const failed: ToolCall = {
+              ...toolCall,
+              pluginId,
+              pluginTitle,
+              functionFingerprint,
+              risk,
+              invocationPolicy: policy,
+              status: "error",
+              isError: true,
+              errorInfo: {
+                code: "TOOL_DEFINITION_CHANGED",
+                message:
+                  "The Tool definition changed during this run. Review the updated capability before trying again.",
+                recoverable: true,
+              },
+              result: normalizeToolResultEnvelope(
+                {
+                  ok: false,
+                  error: {
+                    code: "TOOL_DEFINITION_CHANGED",
+                    message:
+                      "The Tool definition changed during this run. Review the updated capability before trying again.",
+                    recoverable: true,
+                  },
+                },
+                {
+                  trust: getToolResultTrust(policy),
+                  provenance: {
+                    origin: policy.origin,
+                    toolName: toolCall.name,
+                    retrievedAt: Date.now(),
+                  },
+                },
+              ),
+            };
+            outputBlockBuilder.updateToolCall(failed);
+            emitOutputBlocks();
+            upsertToolCall(failed);
+            nonExecutedToolCalls.push(failed);
+            continue;
+          }
+
+          if (priorWithSameArguments) {
+            const replay = getToolReplayDecision(priorWithSameArguments);
+            if (replay.action === "reuse") {
+              const cached = requestHistory
+                .flatMap((message) => message.toolCalls || [])
+                .find(
+                  (historical) =>
+                    historical.id === priorWithSameArguments.callId &&
+                    historical.result !== undefined,
+                );
+              const cachedResultHash = cached
+                ? await hashToolArguments(cached.result)
+                : undefined;
+              const verifiedReference = replay.resultRefs.some(
+                (reference) =>
+                  reference.kind !== "tool_cache" ||
+                  reference.contentHash === cachedResultHash,
+              );
+              if (cached && verifiedReference) {
+                const reused: ToolCall = {
+                  ...toolCall,
+                  pluginId,
+                  pluginTitle,
+                  functionFingerprint,
+                  executionRecordId: priorWithSameArguments.id,
+                  risk,
+                  invocationPolicy: policy,
+                  status: cached.isError ? "error" : "success",
+                  isError: cached.isError,
+                  result: cached.result,
+                  approvalReason: "automatic",
+                  confirmation: {
+                    required: false,
+                    state: "approved",
+                    decision: "automatic",
+                    decidedAt: Date.now(),
+                  },
+                  startedAt: Date.now(),
+                  endedAt: Date.now(),
+                  durationMs: 0,
+                };
+                outputBlockBuilder.updateToolCall(reused);
+                emitOutputBlocks();
+                upsertToolCall(reused);
+                nonExecutedToolCalls.push(reused);
+                continue;
+              }
+            }
+            if (replay.action === "block" || replay.action === "reuse") {
+              const failed: ToolCall = {
+                ...toolCall,
+                pluginId,
+                pluginTitle,
+                functionFingerprint,
+                executionRecordId: priorWithSameArguments.id,
+                risk,
+                invocationPolicy: policy,
+                status: "error",
+                isError: true,
+                errorInfo: {
+                  code: "TOOL_REPLAY_BLOCKED",
+                  message:
+                    replay.action === "reuse"
+                      ? "The committed Tool result is unavailable; the side effect was not replayed."
+                      : `The Tool effect cannot be replayed safely (${replay.reason}).`,
+                  recoverable: true,
+                },
+                result: normalizeToolResultEnvelope(
+                  {
+                    ok: false,
+                    error: {
+                      code: "TOOL_REPLAY_BLOCKED",
+                      message:
+                        replay.action === "reuse"
+                          ? "The committed Tool result is unavailable; the side effect was not replayed."
+                          : `The Tool effect cannot be replayed safely (${replay.reason}).`,
+                      recoverable: true,
+                    },
+                  },
+                  {
+                    trust: getToolResultTrust(policy),
+                    provenance: {
+                      origin: policy.origin,
+                      toolName: toolCall.name,
+                      retrievedAt: Date.now(),
+                    },
+                  },
+                ),
+              };
+              outputBlockBuilder.updateToolCall(failed);
+              emitOutputBlocks();
+              upsertToolCall(failed);
+              nonExecutedToolCalls.push(failed);
+              continue;
+            }
+          }
+        }
+
+        let identifiedToolCall: ToolCall = {
+          ...toolCall,
+          pluginId,
+          pluginTitle,
+          functionFingerprint,
+          risk,
+          invocationPolicy: policy,
+        };
+        if (agentRun) {
+          await updateAgentRun((current) =>
+            prepareToolExecution(current, {
+              callId: toolCall.id,
+              toolName: toolCall.name,
+              ...(resolved ? { pluginId } : {}),
+              definitionFingerprint: functionFingerprint,
+              argumentsHash: argumentsHash!,
+              targetSummary: getToolTargetScope(toolCall.args),
+              round: round + 1,
+              policy,
+            }),
+          );
+          const executionRecord = agentRun.toolExecutions.find(
+            (record) => record.callId === toolCall.id,
+          );
+          if (executionRecord) {
+            identifiedToolCall = {
+              ...identifiedToolCall,
+              executionRecordId: executionRecord.id,
+            };
+          }
+        }
+
+        const approval = evaluateToolInvocationApproval(policy, {
+          profile: options?.approvalMode ?? "permissive",
+          originTrusted: policy.origin !== "mcp",
+          policyVerified: policy.origin !== "mcp",
+        });
+        identifiedToolCall.approvalReason = approval.reason;
+        if (!approval.requiresConfirmation) {
+          approvedToolCalls.push({
+            ...identifiedToolCall,
+            confirmation: {
+              required: false,
+              state: "approved",
+              decision: "automatic",
+              decidedAt: Date.now(),
+            },
+          });
+          continue;
+        }
+
+        const approvalCandidate = {
+          pluginId,
+          functionName,
+          risk,
+          functionFingerprint,
+          sessionId,
+          identity: createToolApprovalIdentity({
+            origin: policy.origin,
+            providerId: pluginId,
+            toolName: functionName,
+            toolFingerprint: functionFingerprint,
+            effects: policy.effects,
+            targetScope: getToolTargetScope(toolCall.args),
+          }),
+        };
+        let decision: ToolConfirmationDecision | undefined;
+
+        if (
+          approval.canPersist &&
+          toolConfirmationController?.isSessionApproved?.(approvalCandidate)
+        ) {
+          decision = "allow_session";
+        }
+
+        if (!decision && toolConfirmationController) {
+          const awaitingToolCall: ToolCall = {
+            ...identifiedToolCall,
+            status: "awaiting_confirmation",
+            confirmation: {
+              required: true,
+              canPersist: approval.canPersist,
+              state: "pending",
+            },
+          };
+          outputBlockBuilder.updateToolCall(awaitingToolCall);
+          emitOutputBlocks();
+          upsertToolCall(awaitingToolCall);
+
+          try {
+            if (agentRun?.status === "running") {
+              await updateAgentRun((current) =>
+                transitionAgentRunStatus(current, "awaiting_approval"),
+              );
+            }
+            decision = normalizeToolConfirmationDecision(
+              await waitForToolConfirmation(
+                toolConfirmationController,
+                {
+                  ...approvalCandidate,
+                  approvedAt: Date.now(),
+                  toolCallId: toolCall.id,
+                  pluginTitle,
+                  args: redactSensitiveToolArgs(toolCall.args),
+                },
+                signal,
+              ),
+              risk,
+            );
+            if (decision === "allow_session" && !approval.canPersist) {
+              decision = "allow_once";
+            }
+            if (agentRun?.status === "awaiting_approval") {
+              await updateAgentRun((current) =>
+                transitionAgentRunStatus(current, "running"),
+              );
+            }
+          } catch (confirmationError) {
+            const aborted = isAbortError(confirmationError, signal);
+            const rejected = createConfirmationFailureToolCall(
+              awaitingToolCall,
+              aborted ? "CONFIRMATION_INTERRUPTED" : "TOOL_CONFIRMATION_FAILED",
+              aborted
+                ? "Tool confirmation was interrupted before a decision."
+                : "Tool confirmation failed before a decision.",
+              aborted ? "interrupted" : "error",
+            );
+            outputBlockBuilder.updateToolCall(rejected);
+            emitOutputBlocks();
+            upsertToolCall(rejected);
+            if (aborted) throw createAbortError(signal);
+            if (agentRun?.status === "awaiting_approval") {
+              await updateAgentRun((current) =>
+                transitionAgentRunStatus(current, "running"),
+              );
+            }
+            if (identifiedToolCall.executionRecordId) {
+              await updateAgentRun((current) =>
+                failToolExecution(
+                  current,
+                  identifiedToolCall.executionRecordId!,
+                  {
+                    code: "TOOL_CONFIRMATION_FAILED",
+                    message: "Tool confirmation failed before execution.",
+                    recoverable: true,
+                  },
+                ),
+              );
+            }
+            nonExecutedToolCalls.push(rejected);
+            continue;
+          }
+        }
+
+        if (!decision) {
+          const failed = createConfirmationFailureToolCall(
+            identifiedToolCall,
+            "TOOL_CONFIRMATION_UNAVAILABLE",
+            "This tool call requires confirmation, but no confirmation controller is available.",
+            "error",
+          );
+          outputBlockBuilder.updateToolCall(failed);
+          emitOutputBlocks();
+          upsertToolCall(failed);
+          if (identifiedToolCall.executionRecordId) {
+            await updateAgentRun((current) =>
+              failToolExecution(
+                current,
+                identifiedToolCall.executionRecordId!,
+                {
+                  code: "TOOL_CONFIRMATION_UNAVAILABLE",
+                  message: "Tool confirmation was unavailable.",
+                  recoverable: true,
+                },
+              ),
+            );
+          }
+          nonExecutedToolCalls.push(failed);
+          continue;
+        }
+
+        if (decision === "deny") {
+          const rejected = createRejectedToolCall(
+            identifiedToolCall,
+            "TOOL_CALL_DENIED",
+            "The user denied this tool call.",
+            false,
+          );
+          outputBlockBuilder.updateToolCall(rejected);
+          emitOutputBlocks();
+          upsertToolCall(rejected);
+          if (identifiedToolCall.executionRecordId) {
+            await updateAgentRun((current) =>
+              failToolExecution(
+                current,
+                identifiedToolCall.executionRecordId!,
+                {
+                  code: "TOOL_CALL_DENIED",
+                  message: "The user denied this tool call.",
+                  recoverable: false,
+                },
+              ),
+            );
+          }
+          nonExecutedToolCalls.push(rejected);
+          continue;
+        }
+
+        const approvedAt = Date.now();
+        if (decision === "allow_session" && approval.canPersist) {
+          toolConfirmationController?.grantSessionApproval?.({
+            ...approvalCandidate,
+            approvedAt,
+          });
+        }
+        const approvedToolCall: ToolCall = {
+          ...identifiedToolCall,
+          confirmation: {
+            required: true,
+            canPersist: approval.canPersist,
+            state: "approved",
+            decision,
+            decidedAt: approvedAt,
+          },
+        };
+        approvedToolCalls.push(approvedToolCall);
+      }
+
+      for (let index = 0; index < approvedToolCalls.length; index += 1) {
+        const toolCall = approvedToolCalls[index];
+        const startedAt = Date.now();
+        if (toolCall.executionRecordId) {
+          await updateAgentRun((current) =>
+            markToolExecutionRunning(
+              current,
+              toolCall.executionRecordId!,
+              startedAt,
+            ),
+          );
+        }
+        const runningToolCall: ToolCall = {
+          ...toolCall,
+          status: "running",
+          startedAt,
+        };
+        approvedToolCalls[index] = runningToolCall;
+        outputBlockBuilder.updateToolCall(runningToolCall);
+        emitOutputBlocks();
+        upsertToolCall(runningToolCall);
+      }
+
+      const pluginImagesByToolCallId = new Map<string, Attachment[]>();
+      notifyAgentExecutionPhase("tool_execution");
+      const completedToolCalls = await mapWithConcurrencyGroups(
+        approvedToolCalls,
+        PLUGIN_EXECUTION_LIMITS.maxToolConcurrency,
+        (toolCall) => builtinBindingsByName.get(toolCall.name)?.executionGroup,
+        async (toolCall) => {
+          try {
+            const builtinBinding = builtinBindingsByName.get(toolCall.name);
+            const awaitsUserInput = toolCall.name === "request_user_input";
+            if (awaitsUserInput && agentRun?.status === "running") {
+              await updateAgentRun((current) =>
+                transitionAgentRunStatus(current, "awaiting_input"),
+              );
+            }
+            let resultData: unknown;
+            const workspacePath =
+              toolCall.name === "read_workspace_file"
+                ? normalizeWorkspacePath(toolCall.args?.path)
+                : undefined;
+            const readsInternalWorkspaceResult = Boolean(
+              workspacePath?.ok &&
+              workspaceInternalReadScope.has(workspacePath.value),
+            );
+            try {
+              const resolvedPluginFunction = offeredPluginFunctionsByName.get(
+                toolCall.name,
+              );
+              const sourceProvider =
+                resolvedPluginFunction?.plugin.id ?? toolCall.pluginId;
+              const sourceOperation = getResearchSourceOperation(
+                sourceProvider,
+                resolvedPluginFunction?.functionDef.name ?? toolCall.name,
+              );
+              const boundedResearch =
+                options?.executionWorkflow?.kind === "research" &&
+                options.executionWorkflow.phase === "execute";
+              let sourceCallFailure: unknown;
+              if (sourceOperation && isResearchSourceProvider(sourceProvider)) {
+                const frozen =
+                  options?.researchSourceContracts?.[
+                    resolvedPluginFunction?.functionDef.name ?? toolCall.name
+                  ];
+                if (
+                  boundedResearch &&
+                  (!frozen ||
+                    frozen.pluginId !== sourceProvider ||
+                    frozen.functionFingerprint !== toolCall.functionFingerprint)
+                ) {
+                  sourceCallFailure = {
+                    ok: false,
+                    error: {
+                      code: "TOOL_DEFINITION_CHANGED",
+                      message:
+                        "The source definition differs from the approved snapshot.",
+                      recoverable: true,
+                    },
+                  };
+                } else if (
+                  boundedResearch &&
+                  (!options?.researchQueryBudget ||
+                    (sourceOperation === "read" &&
+                      !options?.researchSourceBudget))
+                ) {
+                  sourceCallFailure = {
+                    ok: false,
+                    error: {
+                      code: "RESEARCH_SOURCE_BUDGET_UNAVAILABLE",
+                      message: "The approved source budget is unavailable.",
+                      recoverable: true,
+                    },
+                  };
+                } else {
+                  const prepared = prepareSpecializedSourceCall(
+                    sourceProvider,
+                    sourceOperation,
+                    toolCall.args,
+                    boundedResearch ? options?.researchQueryBudget : undefined,
+                  );
+                  if ("error" in prepared) sourceCallFailure = prepared.error;
+                  else toolCall = { ...toolCall, args: prepared.args };
+                }
+              }
+              const consumesResearchSource =
+                options?.executionWorkflow?.kind === "research" &&
+                options.executionWorkflow.phase === "execute" &&
+                !readsInternalWorkspaceResult &&
+                ((Boolean(toolCall.pluginId) && sourceOperation !== "search") ||
+                  RESEARCH_SINGLE_SOURCE_READ_TOOLS.has(toolCall.name));
+              const sourceLocator =
+                sourceOperation === "read" && sourceProvider
+                  ? getSpecializedCallLocator(sourceProvider, toolCall.args)
+                  : toolCall.pluginId
+                    ? `${toolCall.invocationPolicy?.origin === "mcp" ? "mcp" : "plugin"}://${encodeURIComponent(toolCall.pluginId)}/${encodeURIComponent(toolCall.name)}`
+                    : toolCall.name === "read_workspace_file"
+                      ? `workspace:///${encodeURIComponent(String(toolCall.args?.path || "unknown"))}`
+                      : `${toolCall.name}://${toolCall.id}`;
+              if (sourceCallFailure) {
+                resultData = sourceCallFailure;
+              } else if (
+                consumesResearchSource &&
+                !consumeBuiltinResearchSourceBodies(
+                  options?.researchSourceBudget,
+                  [sourceLocator],
+                )
+              ) {
+                resultData = {
+                  ok: false,
+                  error: {
+                    code: "RESEARCH_SOURCE_BUDGET_EXHAUSTED",
+                    message:
+                      "The approved full-source reading budget is exhausted.",
+                    recoverable: true,
+                  },
+                };
+              } else {
+                await options?.beforeDispatch?.();
+                resultData = builtinBinding
+                  ? await builtinBinding.execute(toolCall.args, {
+                      signal,
+                      sessionId,
+                      model,
+                      userMessageId: options?.agentRun?.userMessageId,
+                      modelMessageId: options?.agentRun?.modelMessageId,
+                      agentRunId: agentRun?.id,
+                      toolCallId: toolCall.id,
+                      userInputController: options?.userInputController,
+                      knowledgeScope: options?.knowledgeScope,
+                      workspaceReadScope: options?.workspaceReadScope,
+                      workspaceInternalReadScope,
+                      emit: {
+                        chatMode: (mode) => {
+                          requestedChatMode = mode;
+                        },
+                        search: (event) =>
+                          emitBuiltinSearch(
+                            toolCall.id,
+                            allToolCalls.findIndex(
+                              (candidate) => candidate.id === toolCall.id,
+                            ),
+                            event,
+                          ),
+                        knowledgeSources: (sources, ragError) =>
+                          emitBuiltinKnowledgeSources(
+                            toolCall.id,
+                            allToolCalls.findIndex(
+                              (candidate) => candidate.id === toolCall.id,
+                            ),
+                            sources,
+                            ragError,
+                          ),
+                        skillInvocation: (invocation) => {
+                          pendingSkillInvocations.set(toolCall.id, invocation);
+                        },
+                        skillToolRestriction: (allowedTools) => {
+                          const next = new Set(allowedTools);
+                          skillAllowedToolNames = skillAllowedToolNames
+                            ? new Set(
+                                [...skillAllowedToolNames].filter((name) =>
+                                  next.has(name),
+                                ),
+                              )
+                            : next;
+                        },
+                        taskPlan: (plan) => {
+                          outputBlockBuilder.upsertTaskPlan(plan);
+                          emitOutputBlocks();
+                        },
+                        workspaceFile: (file) => {
+                          outputBlockBuilder.upsertWorkspaceFile({
+                            path: file.path,
+                            fileName: file.fileName,
+                            mimeType: file.mimeType,
+                            bytes: file.bytes,
+                            url: file.url,
+                            revision: file.revision,
+                            ...(file.title ? { title: file.title } : {}),
+                          });
+                          emitOutputBlocks();
+                        },
+                        archiveFile: (archive) => {
+                          outputBlockBuilder.upsertArchiveFile({
+                            fileName: archive.fileName,
+                            bytes: archive.bytes,
+                            entryCount: archive.entryCount,
+                            url: archive.url,
+                            ...(archive.title ? { title: archive.title } : {}),
+                          });
+                          emitOutputBlocks();
+                        },
+                        longText: (request) => {
+                          const capture =
+                            outputBlockBuilder.startLongTextCapture(request);
+                          if (capture.ok) {
+                            longTextCaptureToolCallId = toolCall.id;
+                          }
+                          return capture;
+                        },
+                        research: getResearchToolEmitters(),
+                      },
+                    })
+                  : await executePluginFunction(
+                      resolvedPluginFunction?.functionDef.name || toolCall.name,
+                      toolCall.args,
+                      toolCall.auth,
+                      toolCall.pluginId
+                        ? [toolCall.pluginId]
+                        : effectiveActivePlugins,
+                      signal,
+                      toolCall.pluginId &&
+                        toolCall.functionFingerprint &&
+                        toolCall.risk
+                        ? {
+                            pluginId: toolCall.pluginId,
+                            functionFingerprint: toolCall.functionFingerprint,
+                            risk: toolCall.risk,
+                          }
+                        : undefined,
+                    );
+              }
+              if (sourceOperation && isResearchSourceProvider(sourceProvider)) {
+                resultData = await normalizeSpecializedSourceResult(
+                  resultData,
+                  sourceProvider,
+                  sourceOperation,
+                  boundedResearch
+                    ? options?.researchQueryBudget?.searchPolicy
+                    : undefined,
+                );
+              }
+              if (
+                toolCall.name === "start_deep_research" &&
+                resultData &&
+                typeof resultData === "object" &&
+                "taskId" in resultData &&
+                typeof resultData.taskId === "string"
+              ) {
+                outputBlockBuilder.upsertResearchTask(resultData.taskId);
+                emitOutputBlocks();
+              }
+            } finally {
+              if (awaitsUserInput && agentRun?.status === "awaiting_input") {
+                await updateAgentRun((current) =>
+                  transitionAgentRunStatus(current, "running"),
+                );
+              }
+            }
+            const outputSchema = builtinBinding
+              ? undefined
+              : offeredPluginFunctionsByName.get(toolCall.name)?.functionDef
+                  .outputSchema;
+            let outputSchemaValidated = false;
+            if (outputSchema) {
+              const preliminaryEnvelope = normalizeToolResultEnvelope(
+                resultData,
+                {
+                  trust: getToolResultTrust(toolCall.invocationPolicy!),
+                  provenance: {
+                    origin: toolCall.invocationPolicy!.origin,
+                    toolName: toolCall.name,
+                  },
+                },
+              );
+              if (!isToolResultFailure(preliminaryEnvelope)) {
+                const record =
+                  resultData &&
+                  typeof resultData === "object" &&
+                  !Array.isArray(resultData)
+                    ? (resultData as Record<string, unknown>)
+                    : undefined;
+                const outputValidation = validateToolOutput(
+                  outputSchema,
+                  record?.structuredContent ?? resultData,
+                );
+                outputSchemaValidated = outputValidation.ok;
+                if (!outputValidation.ok) {
+                  resultData = {
+                    ok: false,
+                    error: {
+                      ...outputValidation.error,
+                      recoverable: false,
+                    },
+                  };
+                }
+              }
+            }
+            const policy = toolCall.invocationPolicy!;
+            const defaultEvidenceKind = toolCall.pluginId
+              ? "mcp"
+              : toolCall.name.includes("mcp")
+                ? "mcp"
+                : toolCall.name.startsWith("fetch_") ||
+                    toolCall.name === "fetch_url"
+                  ? "fetch"
+                  : toolCall.name.includes("attachment")
+                    ? "attachment"
+                    : "search";
+            let rawEnvelope = normalizeToolResultEnvelope(resultData, {
+              trust: getToolResultTrust(policy),
+              provenance: {
+                origin: policy.origin,
+                toolName: toolCall.name,
+                retrievedAt: Date.now(),
+              },
+            });
+            let isError = isToolResultFailure(rawEnvelope);
+            const existingEvidence = agentRun
+              ? collectAgentEvidenceRecords(resultData, {
+                  toolCallId: toolCall.id,
+                  defaultKind: defaultEvidenceKind,
+                })
+              : [];
+            const shouldCreateResearchPluginEvidence =
+              agentRun?.workflowKind === "research" &&
+              options?.executionWorkflow?.kind === "research" &&
+              options.executionWorkflow.phase === "execute" &&
+              !readsInternalWorkspaceResult &&
+              !builtinBinding &&
+              Boolean(toolCall.pluginId) &&
+              !isResearchSourceProvider(toolCall.pluginId) &&
+              !isError &&
+              existingEvidence.length === 0 &&
+              policy.effects.length > 0 &&
+              policy.effects.every(
+                (effect) =>
+                  effect === "local_read" || effect === "network_read",
+              );
+            if (shouldCreateResearchPluginEvidence) {
+              const retrievedAt = Date.now();
+              const contentHash = await hashToolArguments(resultData);
+              const scheme = policy.origin === "mcp" ? "mcp" : "plugin";
+              const locator = `${scheme}://${encodeURIComponent(
+                toolCall.pluginId!,
+              )}/${encodeURIComponent(toolCall.name)}`;
+              const identityHash = await hashToolArguments({
+                locator,
+                contentHash,
+              });
+              const researchEvidence = {
+                sourceId: `source-${identityHash.replace(/^[^:]+:/, "").slice(0, 20)}`,
+                url: locator,
+                title: toolCall.pluginTitle || toolCall.name,
+                retrievedAt,
+                contentHash,
+                retrievalKind: "mcp" as const,
+                externalUntrusted: true as const,
+              };
+              resultData =
+                resultData &&
+                typeof resultData === "object" &&
+                !Array.isArray(resultData)
+                  ? {
+                      ...(resultData as Record<string, unknown>),
+                      _researchEvidence: researchEvidence,
+                    }
+                  : { value: resultData, _researchEvidence: researchEvidence };
+              rawEnvelope = normalizeToolResultEnvelope(resultData, {
+                trust: getToolResultTrust(policy),
+                provenance: {
+                  origin: policy.origin,
+                  toolName: toolCall.name,
+                  retrievedAt,
+                },
+              });
+              isError = isToolResultFailure(rawEnvelope);
+            }
+            if (agentRun) {
+              const evidence =
+                existingEvidence.length > 0
+                  ? existingEvidence
+                  : collectAgentEvidenceRecords(resultData, {
+                      toolCallId: toolCall.id,
+                      defaultKind: defaultEvidenceKind,
+                    });
+              if (evidence.length > 0) {
+                await updateAgentRun((current) =>
+                  recordAgentEvidence(current, evidence),
+                );
+              }
+            }
+            if (!builtinBinding && !isError) {
+              const pluginImages = extractPluginImageAttachments(resultData);
+              if (pluginImages.length > 0) {
+                pluginImagesByToolCallId.set(toolCall.id, pluginImages);
+              }
+            }
+            const compactedResult = isError
+              ? resultData
+              : compactPluginImageResultForHistory(resultData);
+            const retainResearchBody =
+              agentRun?.workflowKind === "research" &&
+              options?.executionWorkflow?.kind === "research" &&
+              options.executionWorkflow.phase === "execute" &&
+              !readsInternalWorkspaceResult &&
+              !isError &&
+              policy.effects.length > 0 &&
+              policy.effects.every(
+                (effect) =>
+                  effect === "local_read" || effect === "network_read",
+              ) &&
+              agentRun.evidence.some(
+                (item) =>
+                  item.toolCallId === toolCall.id &&
+                  item.retrievalKind !== "search",
+              );
+            const historyResult = retainResearchBody
+              ? await prepareResearchResultHistory(
+                  sessionId,
+                  toolCall.id,
+                  compactedResult,
+                )
+              : await compactLargeToolResult(toolCall, compactedResult);
+            if (researchModeEnabled && historyResult.resultRef) {
+              workspaceInternalReadScope.add(historyResult.resultRef.id);
+            }
+            const endedAt = Date.now();
+            const hasSideEffect =
+              !isError &&
+              policy.effects.some(
+                (effect) =>
+                  effect === "local_write" ||
+                  effect === "local_destructive" ||
+                  effect === "external_write" ||
+                  effect === "external_destructive",
+              );
+            const effectResultHash = !isError
+              ? await hashToolArguments(historyResult.value)
+              : undefined;
+            const effectReceipt = hasSideEffect
+              ? {
+                  committedAt: endedAt,
+                  effectId: toolCall.id,
+                  targetHash: await hashToolArguments(
+                    getToolTargetScope(toolCall.args),
+                  ),
+                  resultHash: effectResultHash,
+                  reversible:
+                    policy.effects.includes("local_write") &&
+                    !policy.effects.includes("local_destructive"),
+                }
+              : undefined;
+            const storedResultData = normalizeToolResultEnvelope(
+              historyResult.value,
+              {
+                trust: getToolResultTrust(policy),
+                provenance: {
+                  origin: policy.origin,
+                  toolName: toolCall.name,
+                  retrievedAt: Date.now(),
+                },
+                ...(historyResult.resultRef
+                  ? {
+                      artifacts: [
+                        {
+                          kind: "workspace_file" as const,
+                          id: historyResult.resultRef.id,
+                          contentHash: historyResult.resultRef.contentHash,
+                        },
+                      ],
+                    }
+                  : {}),
+                ...(effectReceipt ? { receipt: effectReceipt } : {}),
+              },
+            );
+            const committedResultHash = !isError
+              ? await hashToolArguments(storedResultData)
+              : undefined;
+            if (toolCall.executionRecordId) {
+              if (isError && isToolResultFailure(rawEnvelope)) {
+                await updateAgentRun((current) => {
+                  const executionError = {
+                    code: rawEnvelope.error.code,
+                    message: rawEnvelope.error.message,
+                    recoverable: rawEnvelope.error.recoverable,
+                  };
+                  if (rawEnvelope.error.effectUnknown) {
+                    const uncertain = markToolExecutionEffectUnknown(
+                      current,
+                      toolCall.executionRecordId!,
+                      executionError,
+                      endedAt,
+                    );
+                    return transitionAgentRunStatus(uncertain, "failed", {
+                      at: endedAt,
+                      stop: {
+                        reason: "effect_unknown",
+                        error: executionError,
+                      },
+                    });
+                  }
+                  return failToolExecution(
+                    current,
+                    toolCall.executionRecordId!,
+                    executionError,
+                    endedAt,
+                  );
+                });
+              } else {
+                await updateAgentRun((current) =>
+                  commitToolExecution(current, toolCall.executionRecordId!, {
+                    at: endedAt,
+                    resultRefs: historyResult.resultRef
+                      ? [historyResult.resultRef]
+                      : [
+                          {
+                            kind: "tool_cache",
+                            id: toolCall.id,
+                            contentHash: committedResultHash!,
+                          },
+                        ],
+                    ...(effectReceipt ? { receipt: effectReceipt } : {}),
+                  }),
+                );
+              }
+            }
+            const completed: ToolCall = {
+              ...toolCall,
+              status: isError ? "error" : "success",
+              isError,
+              result: storedResultData,
+              intelligentUiResult: !isError
+                ? ((await captureToolResultView({
+                    callId: toolCall.id,
+                    toolName: toolCall.name,
+                    pluginId: toolCall.pluginId,
+                    executionId: toolCall.executionRecordId,
+                    definitionFingerprint: toolCall.functionFingerprint,
+                    retrievedAt: endedAt,
+                    result: storedResultData,
+                    outputSchema,
+                    outputSchemaValidated,
+                  }).catch(() => undefined)) ?? undefined)
+                : undefined,
+              endedAt,
+              durationMs: toolCall.startedAt
+                ? Math.max(0, endedAt - toolCall.startedAt)
+                : undefined,
+            };
+            outputBlockBuilder.updateToolCall(completed);
+            emitOutputBlocks();
+            upsertToolCall(completed);
+            return completed;
+          } catch (toolError) {
+            if (isAbortError(toolError, signal)) throw toolError;
+            const endedAt = Date.now();
+            if (toolCall.executionRecordId) {
+              await updateAgentRun((current) =>
+                failToolExecution(
+                  current,
+                  toolCall.executionRecordId!,
+                  {
+                    code: "TOOL_EXECUTION_FAILED",
+                    message:
+                      toolError instanceof Error
+                        ? toolError.message
+                        : String(toolError),
+                    recoverable: false,
+                  },
+                  endedAt,
+                ),
+              );
+            }
+            const policy = toolCall.invocationPolicy!;
+            const failed: ToolCall = {
+              ...toolCall,
+              status: "error",
+              isError: true,
+              result: normalizeToolResultEnvelope(
+                {
+                  ok: false,
+                  error: {
+                    code: "TOOL_EXECUTION_FAILED",
+                    message:
+                      toolError instanceof Error
+                        ? toolError.message
+                        : String(toolError),
+                    recoverable: false,
+                  },
+                },
+                {
+                  trust: getToolResultTrust(policy),
+                  provenance: {
+                    origin: policy.origin,
+                    toolName: toolCall.name,
+                    retrievedAt: endedAt,
+                  },
+                },
+              ),
+              endedAt,
+              durationMs: toolCall.startedAt
+                ? Math.max(0, endedAt - toolCall.startedAt)
+                : undefined,
+            };
+            outputBlockBuilder.updateToolCall(failed);
+            emitOutputBlocks();
+            upsertToolCall(failed);
+            return failed;
+          }
+        },
+      );
+      const roundPluginImages = approvedToolCalls
+        .flatMap((toolCall) => pluginImagesByToolCallId.get(toolCall.id) || [])
+        .slice(0, ATTACHMENT_LIMITS.maxCount);
+      const unknownEffectCall = completedToolCalls.find(
+        (toolCall) =>
+          isToolResultFailure(toolCall.result) &&
+          toolCall.result.error.effectUnknown,
+      );
+      if (unknownEffectCall) {
+        throw new Error(
+          `The effect of ${unknownEffectCall.name} could not be confirmed.`,
+        );
+      }
+      if (researchPhase === "start") {
+        const startCall = completedToolCalls.find(
+          (toolCall) => toolCall.name === "start_deep_research",
+        );
+        if (!startCall || startCall.status !== "success" || startCall.isError) {
+          throw new ResearchStartRequiredError();
+        }
+        notifyAgentExecutionPhase("idle");
+        return "";
+      }
+      if (requestedChatMode) {
+        const nextConfig = {
+          ...applyChatMode(config, requestedChatMode),
+          useSearch:
+            requestedChatMode === "research" && searchCompatibility.enabled
+              ? true
+              : config.useSearch === true,
+        };
+        const agentRunId =
+          requestedChatMode === "agent"
+            ? options?.agentRun?.id || uuidv7()
+            : undefined;
+        try {
+          options?.onChatModeChange?.(nextConfig, agentRunId);
+        } catch {
+          // UI observers do not own the request's execution semantics.
+        }
+        onToolUpdate?.([]);
+        onOutputBlocks?.([]);
+        onChunk("", "", []);
+        return streamChatResponse(
+          sessionId,
+          model,
+          history,
+          requestedChatMode === "research"
+            ? options?.researchLaunchMessage || newMessage
+            : newMessage,
+          attachments,
+          nextConfig,
+          onChunk,
+          userSystemInstruction,
+          onSearchStatus,
+          onToolUpdate,
+          onImage,
+          onUsage,
+          signal,
+          activePlugins,
+          skillsContext,
+          onOutputBlocks,
+          toolConfirmationController,
+          {
+            ...options,
+            executionWorkflow:
+              requestedChatMode === "research"
+                ? { kind: "research", phase: "start" }
+                : { kind: "agent" },
+            agentRun: agentRunId
+              ? {
+                  ...options?.agentRun,
+                  id: agentRunId,
+                }
+              : requestedChatMode === "research"
+                ? options?.agentRun
+                : undefined,
+            allowedToolIds: undefined,
+            enforceAllowedToolIds: undefined,
+            allowedToolEffects: undefined,
+            resumeAgentRun: false,
+          },
+        );
+      }
+      const completedById = new Map(
+        [...completedToolCalls, ...nonExecutedToolCalls].map((toolCall) => [
+          toolCall.id,
+          toolCall,
+        ]),
+      );
+      if (roundPluginImages.length > 0) {
+        const displayImages = await prepareGeneratedImageAttachments(
+          roundPluginImages,
+          imageCompressionConfig,
+          { signal },
+        );
+        let displayImageIndex = 0;
+        for (const toolCall of approvedToolCalls) {
+          const resultImageCount = Math.min(
+            pluginImagesByToolCallId.get(toolCall.id)?.length || 0,
+            displayImages.length - displayImageIndex,
+          );
+          if (resultImageCount === 0) continue;
+
+          const completed = completedById.get(toolCall.id);
+          if (!completed) continue;
+          const resultImages = displayImages.slice(
+            displayImageIndex,
+            displayImageIndex + resultImageCount,
+          );
+          displayImageIndex += resultImageCount;
+          outputBlockBuilder.updateToolCall({
+            ...completed,
+            resultImages,
+          });
+        }
+        onChunk(
+          committedContent + result.content,
+          committedReasoning + result.reasoning,
+          outputBlockBuilder.getBlocks(),
+        );
+      }
+      for (const toolCall of approvedToolCalls) {
+        const invocation = pendingSkillInvocations.get(toolCall.id);
+        pendingSkillInvocations.delete(toolCall.id);
+        if (!invocation || emittedSkillIds.has(invocation.id)) continue;
+        emittedSkillIds.add(invocation.id);
+        options?.onSkillInvocation?.({
+          ...invocation,
+          order: emittedSkillIds.size - 1,
+        });
+      }
+      const executedToolCalls = [
+        ...toolCallsToExecute.flatMap((toolCall) => {
+          const completed = completedById.get(toolCall.id);
+          return completed ? [completed] : [];
+        }),
+        ...budgetSkippedToolCalls,
+      ];
+
+      notifyAgentExecutionPhase("idle");
+      let pauseAfterToolBatch = false;
+      try {
+        pauseAfterToolBatch = options?.shouldPauseAfterToolBatch?.() === true;
+      } catch {
+        pauseAfterToolBatch = true;
+      }
+      if (pauseAfterToolBatch) {
+        throw createAbortError();
+      }
+
+      committedContent = result.content
+        ? `${committedContent}${result.content}\n\n`
+        : committedContent;
+      committedReasoning = result.reasoning
+        ? `${committedReasoning}${result.reasoning}\n\n`
+        : committedReasoning;
+
+      requestHistory = [
+        ...requestHistory,
+        {
+          id: uuidv7(),
+          role: "user",
+          content: requestMessage,
+          attachments: requestAttachments,
+          timestamp: Date.now(),
+        },
+        {
+          id: uuidv7(),
+          role: "model",
+          content: projectUiText(result.content, {
+            purpose: "model-continuation",
+            locale: projectionLocale,
+          }),
+          reasoning: result.reasoning,
+          toolCalls: executedToolCalls,
+          timestamp: Date.now(),
+        },
+      ];
+      const successfulLongTextCall = completedToolCalls.find(
+        (toolCall) =>
+          toolCall.name === LONG_TEXT_TOOL_NAME &&
+          toolCall.status === "success" &&
+          !toolCall.isError,
+      );
+      if (successfulLongTextCall) {
+        const args = successfulLongTextCall.args as {
+          title?: unknown;
+          format?: unknown;
+        };
+        const title =
+          typeof args.title === "string" ? args.title : "Untitled document";
+        const format = args.format === "plain_text" ? "plain text" : "Markdown";
+        requestMessage = `Write the complete ${format} body for the document titled ${JSON.stringify(title)}. Output only the document body as ordinary text. Do not add a preamble, do not call another tool, and do not repeat the title unless it belongs in the document itself.`;
+        requestTools = [];
+      } else {
+        requestMessage =
+          roundPluginImages.length > 0
+            ? "Use the tool results above and the attached image outputs to answer the user's original request. Only call another tool if more external data is required."
+            : "Use the tool results above to answer the user's original request. Only call another tool if more external data is required.";
+        requestTools = skillAllowedToolNames
+          ? tools.filter((tool) =>
+              skillAllowedToolNames!.has(tool.function.name),
+            )
+          : tools;
+      }
+      requestAttachments = roundPluginImages;
+    }
+
+    if (outputBlockBuilder.finalizeIntelligentUi()) emitOutputBlocks();
+    assertForcedPluginsCalled();
+    await completeAgentRun();
+    return committedContent;
+  } catch (error) {
+    if (outputBlockBuilder.finalizeIntelligentUi(true)) emitOutputBlocks();
+    if (
+      agentRun &&
+      agentRun.status !== "completed" &&
+      agentRun.status !== "failed" &&
+      agentRun.status !== "cancelled"
+    ) {
+      await updateAgentRun((current) => {
+        const recovered = recoverInterruptedToolExecutions(current);
+        const hasUnknownEffect = recovered.toolExecutions.some(
+          (record) => record.status === "effect_unknown",
+        );
+        if (hasUnknownEffect) {
+          return transitionAgentRunStatus(recovered, "failed", {
+            stop: {
+              reason: "effect_unknown",
+              error: {
+                code: "TOOL_EFFECT_UNKNOWN",
+                message:
+                  "A tool may have produced a side effect before its result was saved.",
+                recoverable: false,
+              },
+            },
+          });
+        }
+        if (typeof navigator !== "undefined" && !navigator.onLine) {
+          return transitionAgentRunStatus(recovered, "interrupted", {
+            stop: { reason: "offline" },
+          });
+        }
+        if (isAbortError(error, signal)) {
+          if (options?.abortAgentRunAsInterrupted) {
+            return transitionAgentRunStatus(recovered, "interrupted", {
+              stop: { reason: "page_interrupted" },
+            });
+          }
+          return transitionAgentRunStatus(recovered, "cancelled", {
+            stop: { reason: "user_stopped" },
+          });
+        }
+        return transitionAgentRunStatus(recovered, "failed", {
+          stop: {
+            reason: "runtime_error",
+            error: {
+              code: error instanceof Error ? error.name : undefined,
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "Agent execution failed.",
+              recoverable: true,
+            },
+          },
+        });
+      });
+    }
+    throw error;
+  } finally {
+    try {
+      options?.onAgentExecutionPhase?.("idle");
+    } catch {
+      // UI lifecycle observers must not change cleanup semantics.
+    }
+    if (agentRunLease) releaseAgentRunLease(agentRunLease);
+  }
+};
